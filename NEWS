@@ -1,4 +1,18 @@
                   ------------------------------
+                   What's new in screen-4.0.3 ?
+                  ------------------------------
+
+* zombie command has new option 'onerror'
+
+* buffer overflow in resize.c fixed
+
+* minor docu update
+
+* more robust startup
+
+* use setresuid; SendAttachMsg() for fd-passing added; DoCSI enhanced.
+
+                  ------------------------------
                    What's new in screen-4.0.0 ?
                   ------------------------------
 

@@ -1,11 +1,16 @@
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,9 +19,9 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
  */
@@ -44,6 +49,7 @@
 #endif
 
 #include "extern.h"
+#include "list_generic.h"
 
 static int   CheckPid __P((int));
 static void  ExecCreate __P((struct msg *));
@@ -53,20 +59,24 @@ static void  DoCommandMsg __P((struct msg *));
 static int   sconnect __P((int, struct sockaddr *, int));
 #endif
 static void  FinishAttach __P((struct msg *));
+static void  FinishDetach __P((struct msg *));
 static void  AskPassword __P((struct msg *));
 
 
 extern char *RcFileName, *extra_incap, *extra_outcap;
 extern int ServerSocket, real_uid, real_gid, eff_uid, eff_gid;
 extern int dflag, iflag, rflag, lsflag, quietflag, wipeflag, xflag;
+extern int queryflag;
 extern char *attach_tty, *LoginName, HostName[];
 extern struct display *display, *displays;
-extern struct win *fore, *wtab[], *console_window, *windows;
+extern struct win *fore, **wtab, *console_window, *windows;
 extern struct layer *flayer;
+extern struct layout *layout_attach, *layout_last, layout_last_marker;
 extern struct NewWindow nwin_undef;
 #ifdef MULTIUSER
 extern char *multi;
 #endif
+extern int maxwin;
 
 extern char *getenv();
 
@@ -118,13 +128,14 @@ char *match;
   int firsts = -1, sockfd;
   char *firstn = NULL;
   int nfound = 0, ngood = 0, ndead = 0, nwipe = 0, npriv = 0;
+  int nperfect = 0;
   struct sent
     {
       struct sent *next;
       int mode;
       char *name;
     } *slist, **slisttail, *sent, *nsent;
-	  
+
   if (match)
     {
       matchlen = strlen(match);
@@ -153,6 +164,7 @@ char *match;
   slisttail = &slist;
   while ((dp = readdir(dirp)))
     {
+      int cmatch = 0;
       name = dp->d_name;
       debug1("- %s\n",  name);
       if (*name == 0 || *name == '.' || strlen(name) > 2*MAXSTR)
@@ -172,7 +184,21 @@ char *match;
 	  if (strncmp(match, "tty", 3) && strncmp(n, "tty", 3) == 0)
 	    n += 3;
 	  if (strncmp(match, n, matchlen))
-	    continue;
+	    {
+	      if (n == name && *match > '0' && *match <= '9')
+		{
+		  while (*n >= '0' && *n <= '9')
+		    n++;
+		  if (*n == '.')
+		    n++;
+		  if (strncmp(match, n, matchlen))
+		    continue;
+		}
+	      else
+		continue;
+	    }
+	  else
+	    cmatch = (*(n + matchlen) == 0);
 	  debug1("  -> matched %s\n", match);
 	}
       sprintf(SockPath + sdirlen, "/%s", name);
@@ -295,8 +321,12 @@ char *match;
 	  continue;
 	}
       ngood++;
-      if (fdp && firsts == -1)
+      if (cmatch)
+	nperfect++;
+      if (fdp && (firsts == -1 || (cmatch && nperfect == 1)))
 	{
+	  if (firsts != -1)
+	    close(firsts);
 	  firsts = sockfd;
 	  firstn = sent->name;
 	  debug("  taken.\n");
@@ -305,9 +335,11 @@ char *match;
         {
 	  debug("  discarded.\n");
 	  close(sockfd);
-	} 
+	}
     }
   (void)closedir(dirp);
+  if (!lsflag && nperfect == 1)
+    ngood = nperfect;
   if (nfound && (lsflag || ngood != 1) && !quietflag)
     {
       switch(ngood)
@@ -387,7 +419,7 @@ char *match;
     *nfoundp = nfound - nwipe;
   return ngood;
 }
-  
+
 
 /*
 **
@@ -419,7 +451,7 @@ MakeServerSocket()
       if (stat(SockPath, &st) == -1)
 	Panic(errno, "stat");
       if ((int)st.st_uid != real_uid)
-	Panic(0, "Unfortunatelly you are not its owner.");
+	Panic(0, "Unfortunately you are not its owner.");
       if ((st.st_mode & 0700) == 0600)
 	Panic(0, "To resume it, use \"screen -r\"");
       else
@@ -511,7 +543,7 @@ MakeServerSocket()
       if (stat(SockPath, &st) == -1)
 	Panic(errno, "stat");
       if (st.st_uid != real_uid)
-	Panic(0, "Unfortunatelly you are not its owner.");
+	Panic(0, "Unfortunately you are not its owner.");
       if ((st.st_mode & 0700) == 0600)
 	Panic(0, "To resume it, use \"screen -r\"");
       else
@@ -707,7 +739,7 @@ struct msg *mp;
 	  if (*buf)
 	    nwin.aka = buf;
 	  num = atoi(p);
-	  if (num < 0 || num > MAXWIN - 1)
+	  if (num < 0 || num > maxwin - 1)
 	    num = 0;
 	  nwin.StartAt = num;
 	  p += l + 1;
@@ -776,38 +808,231 @@ char *s1, *s2;
 # define TTYCMP(a, b) strcmp(a, b)
 #endif
 
+static int
+CreateTempDisplay(m, recvfd, wi)
+struct msg *m;
+int recvfd;
+struct win *wi;
+{
+  int pid;
+  int attach;
+  char *user;
+  int i;
+  struct mode Mode;
+  struct display *olddisplays = displays;
+
+  switch (m->type)
+    {
+      case MSG_CONT:
+      case MSG_ATTACH:
+	pid = m->m.attach.apid;
+	user = m->m.attach.auser;
+	attach = 1;
+	break;
+#ifdef REMOTE_DETACH
+      case MSG_DETACH:
+# ifdef POW_DETACH
+      case MSG_POW_DETACH:
+# endif				/* POW_DETACH */
+	pid = m->m.detach.dpid;
+	user = m->m.detach.duser;
+	attach = 0;
+	break;
+#endif
+      default:
+	return -1;
+    }
+
+  if (CheckPid(pid))
+    {
+      Msg(0, "Attach attempt with bad pid(%d)!", pid);
+      return -1;
+    }
+  if (recvfd != -1)
+    {
+      char *myttyname;
+      i = recvfd;
+      recvfd = -1;
+      myttyname = ttyname(i);
+      if (myttyname == 0 || strcmp(myttyname, m->m_tty))
+	{
+	  Msg(errno, "Attach: passed fd does not match tty: %s - %s!", m->m_tty, myttyname ? myttyname : "NULL");
+	  close(i);
+	  Kill(pid, SIG_BYE);
+	  return -1;
+	}
+    }
+  else if ((i = secopen(m->m_tty, O_RDWR | O_NONBLOCK, 0)) < 0)
+    {
+      Msg(errno, "Attach: Could not open %s!", m->m_tty);
+      Kill(pid, SIG_BYE);
+      return -1;
+    }
+#ifdef MULTIUSER
+  if (attach)
+    Kill(pid, SIGCONT);
+#endif
+
+#if defined(ultrix) || defined(pyr) || defined(NeXT)
+  brktty(i);	/* for some strange reason this must be done */
+#endif
+
+  if (attach)
+    {
+      if (display || wi)
+	{
+	  write(i, "Attaching from inside of screen?\n", 33);
+	  close(i);
+	  Kill(pid, SIG_BYE);
+	  Msg(0, "Attach msg ignored: coming from inside.");
+	  return -1;
+	}
+
+#ifdef MULTIUSER
+      if (strcmp(user, LoginName))
+	if (*FindUserPtr(user) == 0)
+	  {
+	      write(i, "Access to session denied.\n", 26);
+	      close(i);
+	      Kill(pid, SIG_BYE);
+	      Msg(0, "Attach: access denied for user %s.", user);
+	      return -1;
+	  }
+#endif
+
+      debug2("RecMsg: apid %d is o.k. and we just opened '%s'\n", pid, m->m_tty);
+#ifndef MULTI
+      if (displays)
+	{
+	  write(i, "Screen session in use.\n", 23);
+	  close(i);
+	  Kill(pid, SIG_BYE);
+	  return -1;
+	}
+#endif
+    }
+
+  /* create new display */
+  GetTTY(i, &Mode);
+  if (MakeDisplay(user, m->m_tty, attach ? m->m.attach.envterm : "", i, pid, &Mode) == 0)
+    {
+      write(i, "Could not make display.\n", 24);
+      close(i);
+      Msg(0, "Attach: could not make display for user %s", user);
+      Kill(pid, SIG_BYE);
+      return -1;
+    }
+#ifdef ENCODINGS
+  if (attach)
+    {
+# ifdef UTF8
+      D_encoding = m->m.attach.encoding == 1 ? UTF8 : m->m.attach.encoding ? m->m.attach.encoding - 1 : 0;
+# else
+      D_encoding = m->m.attach.encoding ? m->m.attach.encoding - 1 : 0;
+# endif
+      if (D_encoding < 0 || !EncodingName(D_encoding))
+	D_encoding = 0;
+    }
+#endif
+
+  if (iflag && olddisplays)
+    {
+      iflag = 0;
+#if defined(TERMIO) || defined(POSIX)
+      olddisplays->d_NewMode.tio.c_cc[VINTR] = VDISABLE;
+      olddisplays->d_NewMode.tio.c_lflag &= ~ISIG;
+#else /* TERMIO || POSIX */
+      olddisplays->d_NewMode.m_tchars.t_intrc = -1;
+#endif /* TERMIO || POSIX */
+      SetTTY(olddisplays->d_userfd, &olddisplays->d_NewMode);
+    }
+  SetMode(&D_OldMode, &D_NewMode, D_flow, iflag);
+  SetTTY(D_userfd, &D_NewMode);
+  if (fcntl(D_userfd, F_SETFL, FNBLOCK))
+    Msg(errno, "Warning: NBLOCK fcntl failed");
+  return 0;
+}
+
 void
 ReceiveMsg()
 {
-  int left, len, i;
+  int left, len;
   static struct msg m;
   char *p;
   int ns = ServerSocket;
-  struct mode Mode;
   struct win *wi;
-#ifdef REMOTE_DETACH
-  struct display *next;
-#endif
-  struct display *olddisplays = displays;
+  int recvfd = -1;
+  struct acluser *user;
 
 #ifdef NAMEDPIPE
   debug("Ha, there was someone knocking on my fifo??\n");
   if (fcntl(ServerSocket, F_SETFL, 0) == -1)
     Panic(errno, "BLOCK fcntl");
+  p = (char *) &m;
+  left = sizeof(m);
 #else
   struct sockaddr_un a;
+  struct msghdr msg;
+  struct iovec iov;
+  char control[1024];
 
   len = sizeof(a);
   debug("Ha, there was someone knocking on my socket??\n");
-  if ((ns = accept(ns, (struct sockaddr *) &a, &len)) < 0)
+  if ((ns = accept(ns, (struct sockaddr *) &a, (void *)&len)) < 0)
     {
       Msg(errno, "accept");
       return;
     }
-#endif				/* NAMEDPIPE */
 
   p = (char *) &m;
   left = sizeof(m);
+  bzero(&msg, sizeof(msg));
+  iov.iov_base = &m;
+  iov.iov_len = left;
+  msg.msg_iov = &iov;
+  msg.msg_iovlen  = 1;
+  msg.msg_controllen = sizeof(control);
+  msg.msg_control = &control;
+  while (left > 0)
+    {
+      len = recvmsg(ns, &msg, 0);
+      if (len < 0 && errno == EINTR)
+	continue;
+      if (len < 0)
+	{
+	  close(ns);
+	  Msg(errno, "read");
+	  return;
+	}
+      if (msg.msg_controllen)
+	{
+	  struct cmsghdr  *cmsg;
+	  for (cmsg = CMSG_FIRSTHDR(&msg); cmsg; cmsg = CMSG_NXTHDR(&msg, cmsg))
+	    {
+	      int cl;
+	      char *cp;
+	      if (cmsg->cmsg_level != SOL_SOCKET || cmsg->cmsg_type != SCM_RIGHTS)
+		continue;
+	      cp = (char *)CMSG_DATA(cmsg);
+	      cl = cmsg->cmsg_len;
+	      while(cl >= CMSG_LEN(sizeof(int)))
+		{
+		  int passedfd;
+		  bcopy(cp, &passedfd, sizeof(int));
+		  if (recvfd >= 0 && passedfd != recvfd)
+		    close(recvfd);
+		  recvfd = passedfd;
+		  cl -= CMSG_LEN(sizeof(int));
+		}
+	    }
+	}
+      p += len;
+      left -= len;
+      break;
+    }
+
+#endif
+
   while (left > 0)
     {
       len = read(ns, p, left);
@@ -836,6 +1061,8 @@ ReceiveMsg()
   if (len < 0)
     {
       Msg(errno, "read");
+      if (recvfd != -1)
+	close(recvfd);
       return;
     }
   if (left > 0)
@@ -848,11 +1075,19 @@ ReceiveMsg()
     }
   if (m.protocol_revision != MSG_REVISION)
     {
+      if (recvfd != -1)
+	close(recvfd);
       Msg(0, "Invalid message (magic 0x%08x).", m.protocol_revision);
       return;
     }
 
   debug2("*** RecMsg: type %d tty %s\n", m.type, m.m_tty);
+  if (m.type != MSG_ATTACH && recvfd != -1)
+    {
+      close(recvfd);
+      recvfd = -1;
+    }
+
   for (display = displays; display; display = display->d_next)
     if (TTYCMP(D_usertty, m.m_tty) == 0)
       break;
@@ -876,7 +1111,11 @@ ReceiveMsg()
     RemoveStatus();
 
   if (display && !D_tcinited && m.type != MSG_HANGUP)
-    return;		/* ignore messages for bad displays */
+    {
+      if (recvfd != -1)
+	close(recvfd);
+      return;		/* ignore messages for bad displays */
+    }
 
   switch (m.type)
     {
@@ -889,12 +1128,8 @@ ReceiveMsg()
        * the window that issued the create message need not be an active
        * window. Then we create the window without having a display.
        * Resulting in another inactive window.
-       * 
-       * Currently we enforce that at least one display exists. But why?
-       * jw.
        */
-      if (displays)
-	ExecCreate(&m);
+      ExecCreate(&m);
       break;
     case MSG_CONT:
 	if (display && D_userpid != 0 && kill(D_userpid, 0) == 0)
@@ -903,93 +1138,8 @@ ReceiveMsg()
       /* FALLTHROUGH */
 
     case MSG_ATTACH:
-      if (CheckPid(m.m.attach.apid))
-	{
-	  Msg(0, "Attach attempt with bad pid(%d)!", m.m.attach.apid);
-          break;
-	}
-      if ((i = secopen(m.m_tty, O_RDWR | O_NONBLOCK, 0)) < 0)
-	{
-	  Msg(errno, "Attach: Could not open %s!", m.m_tty);
-	  Kill(m.m.attach.apid, SIG_BYE);
-	  break;
-	}
-# ifdef MULTIUSER
-      Kill(m.m.attach.apid, SIGCONT);
-# endif
-
-#if defined(ultrix) || defined(pyr) || defined(NeXT)
-      brktty(i);	/* for some strange reason this must be done */
-#endif
-
-      if (display || wi)
-	{
-	  write(i, "Attaching from inside of screen?\n", 33);
-	  close(i);
-	  Kill(m.m.attach.apid, SIG_BYE);
-	  Msg(0, "Attach msg ignored: coming from inside.");
-	  break;
-	}
-
-#ifdef MULTIUSER
-      if (strcmp(m.m.attach.auser, LoginName))
-        if (*FindUserPtr(m.m.attach.auser) == 0)
-	  {
-              write(i, "Access to session denied.\n", 26);
-	      close(i);
-	      Kill(m.m.attach.apid, SIG_BYE);
-	      Msg(0, "Attach: access denied for user %s.", m.m.attach.auser);
-	      break;
-	  }
-#endif
-
-      debug2("RecMsg: apid %d is o.k. and we just opened '%s'\n", m.m.attach.apid, m.m_tty);
-#ifndef MULTI
-      if (displays)
-	{
-	  write(i, "Screen session in use.\n", 23);
-	  close(i);
-	  Kill(m.m.attach.apid, SIG_BYE);
-	  break;
-	}
-#endif
-
-      /* create new display */
-      GetTTY(i, &Mode);
-      if (MakeDisplay(m.m.attach.auser, m.m_tty, m.m.attach.envterm, i, m.m.attach.apid, &Mode) == 0)
-        {
-	  write(i, "Could not make display.\n", 24);
-	  close(i);
-	  Msg(0, "Attach: could not make display for user %s", m.m.attach.auser);
-	  Kill(m.m.attach.apid, SIG_BYE);
-	  break;
-        }
-#ifdef ENCODINGS
-# ifdef UTF8
-      D_encoding = m.m.attach.encoding == 1 ? UTF8 : m.m.attach.encoding ? m.m.attach.encoding - 1 : 0;
-# else
-      D_encoding = m.m.attach.encoding ? m.m.attach.encoding - 1 : 0;
-# endif
-      if (D_encoding < 0 || !EncodingName(D_encoding))
-	D_encoding = 0;
-#endif
-      /* turn off iflag on a multi-attach... */
-      if (iflag && olddisplays)
-	{
-	  iflag = 0;
-#if defined(TERMIO) || defined(POSIX)
-	  olddisplays->d_NewMode.tio.c_cc[VINTR] = VDISABLE;
-	  olddisplays->d_NewMode.tio.c_lflag &= ~ISIG;
-#else /* TERMIO || POSIX */
-	  olddisplays->d_NewMode.m_tchars.t_intrc = -1;
-#endif /* TERMIO || POSIX */
-	  SetTTY(olddisplays->d_userfd, &olddisplays->d_NewMode);
-	}
-      SetMode(&D_OldMode, &D_NewMode, D_flow, iflag);
-      SetTTY(D_userfd, &D_NewMode);
-      if (fcntl(D_userfd, F_SETFL, FNBLOCK))
-        Msg(errno, "Warning: NBLOCK fcntl failed");
-
+      if (CreateTempDisplay(&m, recvfd, wi))
+	break;
 #ifdef PASSWORD
       if (D_user->u_password && *D_user->u_password)
 	AskPassword(&m);
@@ -1009,25 +1159,71 @@ ReceiveMsg()
 # ifdef POW_DETACH
     case MSG_POW_DETACH:
 # endif				/* POW_DETACH */
-      for (display = displays; display; display = next)
+#ifdef PASSWORD
+      user = *FindUserPtr(m.m.detach.duser);
+      if (user && user->u_password && *user->u_password)
 	{
-	  next = display->d_next;
-# ifdef POW_DETACH
-	  if (m.type == MSG_POW_DETACH)
-	    Detach(D_REMOTE_POWER);
-	  else
-# endif				/* POW_DETACH */
-	  if (m.type == MSG_DETACH)
-	    Detach(D_REMOTE);
+	  if (CreateTempDisplay(&m, recvfd, 0))
+	    break;
+	  AskPassword(&m);
 	}
+      else
+#endif /* PASSWORD */
+	FinishDetach(&m);
       break;
 #endif
+    case MSG_QUERY:
+	{
+	  char *oldSockPath = SaveStr(SockPath);
+	  strcpy(SockPath, m.m.command.writeback);
+	  int s = MakeClientSocket(0);
+	  strcpy(SockPath, oldSockPath);
+	  Free(oldSockPath);
+	  if (s >= 0)
+	    {
+	      queryflag = s;
+	      DoCommandMsg(&m);
+	      close(s);
+	    }
+	  else
+	    queryflag = -1;
+
+	  Kill(m.m.command.apid, (queryflag >= 0) ? SIGCONT : SIG_BYE);	/* Send SIG_BYE if an error happened */
+	  queryflag = -1;
+	}
+      break;
     case MSG_COMMAND:
       DoCommandMsg(&m);
       break;
     default:
       Msg(0, "Invalid message (type %d).", m.type);
     }
+}
+
+void
+ReceiveRaw(s)
+int s;
+{
+  char rd[256];
+  int len = 0;
+#ifdef NAMEDPIPE
+  if (fcntl(s, F_SETFL, 0) == -1)
+    Panic(errno, "BLOCK fcntl");
+#else
+  struct sockaddr_un a;
+  len = sizeof(a);
+  if ((s = accept(s, (struct sockaddr *) &a, (void *)&len)) < 0)
+    {
+      Msg(errno, "accept");
+      return;
+    }
+#endif
+  while ((len = read(s, rd, 255)) > 0)
+    {
+      rd[len] = 0;
+      printf("%s", rd);
+    }
+  close(s);
 }
 
 #if defined(_SEQUENT_) && !defined(NAMEDPIPE)
@@ -1117,6 +1313,15 @@ struct msg *m;
   ASSERT(display);
   pid = D_userpid;
 
+#ifdef REMOTE_DETACH
+  if (m->m.attach.detachfirst == MSG_DETACH
+# ifdef POW_DETACH
+      || m->m.attach.detachfirst == MSG_POW_DETACH
+# endif
+     )
+    FinishDetach(m);
+#endif
+
 #if defined(pyr) || defined(xelos) || defined(sequent)
   /*
    * Kludge for systems with braindamaged termcap routines,
@@ -1143,12 +1348,12 @@ struct msg *m;
 #ifdef ETCSCREENRC
 # ifdef ALLOW_SYSSCREENRC
   if ((p = getenv("SYSSCREENRC")))
-    StartRc(p);
+    StartRc(p, 1);
   else
 # endif
-    StartRc(ETCSCREENRC);
+    StartRc(ETCSCREENRC, 1);
 #endif
-  StartRc(RcFileName);
+  StartRc(RcFileName, 1);
   if (InitTermcap(m->m.attach.columns, m->m.attach.lines))
     {
       FreeDisplay();
@@ -1180,6 +1385,17 @@ struct msg *m;
 #endif
 
   D_fore = NULL;
+  if (layout_attach)
+    {
+      struct layout *lay = layout_attach;
+      if (lay == &layout_last_marker)
+	lay = layout_last;
+      if (lay)
+	{
+	  LoadLayout(lay, &D_canvas);
+	  SetCanvasWindow(D_forecv, 0);
+	}
+    }
   /*
    * there may be a window that we remember from last detach:
    */
@@ -1203,6 +1419,15 @@ struct msg *m;
           fore = 0;
 	  noshowwin = 1;
 	}
+      else if (!strcmp(m->m.attach.preselect, "+"))
+	{
+	  struct action newscreen;
+	  char *na = 0;
+	  newscreen.nr = RC_SCREEN;
+	  newscreen.args = &na;
+	  newscreen.quiet = 0;
+	  DoAction(&newscreen, -1);
+	}
       else
         fore = FindNiceWindow(fore, m->m.attach.preselect);
     }
@@ -1216,9 +1441,11 @@ struct msg *m;
       if (!AclCheckPermCmd(D_user, ACL_EXEC, &comms[RC_WINDOWLIST]))
 #endif
 	{
+	  struct display *olddisplay = display;
 	  flayer = D_forecv->c_layer;
-	  display_wlist(1, WLIST_NUM);
+	  display_windows(1, WLIST_NUM, (struct win *)0);
 	  noshowwin = 1;
+	  display = olddisplay;	/* display_windows can change display */
 	}
     }
   Activate(0);
@@ -1242,6 +1469,59 @@ struct msg *m;
 # endif /* SIG_NODEBUG */
 }
 
+static void
+FinishDetach(m)
+struct msg *m;
+{
+  struct display *next, **d, *det;
+  int pid;
+
+  if (m->type == MSG_ATTACH)
+    pid = D_userpid;
+  else
+    pid = m->m.detach.dpid;
+
+  /* Remove the temporary display prompting for the password from the list */
+  for (d = &displays; (det = *d); d = &det->d_next)
+    {
+      if (det->d_userpid == pid)
+	break;
+    }
+  if (det)
+    {
+      *d = det->d_next;
+      det->d_next = 0;
+    }
+
+  for (display = displays; display; display = next)
+    {
+      next = display->d_next;
+# ifdef POW_DETACH
+      if (m->type == MSG_POW_DETACH)
+	Detach(D_REMOTE_POWER);
+      else
+# endif				/* POW_DETACH */
+      if (m->type == MSG_DETACH)
+	Detach(D_REMOTE);
+      else if (m->type == MSG_ATTACH)
+	{
+#ifdef POW_DETACH
+	  if (m->m.attach.detachfirst == MSG_POW_DETACH)
+	    Detach(D_REMOTE_POWER);
+	  else
+#endif
+	  if (m->m.attach.detachfirst == MSG_DETACH)
+	    Detach(D_REMOTE);
+	}
+    }
+  display = displays = det;
+  if (m->type != MSG_ATTACH)
+    {
+      if (display)
+	FreeDisplay();
+      Kill(pid, SIGCONT);
+    }
+}
 
 #ifdef PASSWORD
 static void PasswordProcessInput __P((char *, int));
@@ -1260,7 +1540,7 @@ struct msg *m;
   ASSERT(display);
   pwdata = (struct pwdata *)malloc(sizeof(struct pwdata));
   if (!pwdata)
-    Panic(0, strnomem);
+    Panic(0, "%s", strnomem);
   pwdata->l = 0;
   pwdata->m = *m;
   D_processinputdata = (char *)pwdata;
@@ -1304,7 +1584,16 @@ int ilen;
 	  AddStr("\r\n");
 	  D_processinputdata = 0;
 	  D_processinput = ProcessInput;
-	  FinishAttach(&pwdata->m);
+#ifdef REMOTE_DETACH
+	  if (pwdata->m.type == MSG_DETACH
+# ifdef POW_DETACH
+	      || pwdata->m.type == MSG_POW_DETACH
+# endif
+	     )
+	    FinishDetach(&pwdata->m);
+	  else
+#endif
+	    FinishAttach(&pwdata->m);
 	  free(pwdata);
 	  return;
 	}
@@ -1333,14 +1622,40 @@ int ilen;
 }
 #endif
 
+/* 'end' is exclusive, i.e. you should *not* write in *end */
+static char *
+strncpy_escape_quote(dst, src, end)
+char *dst;
+const char *src, *end;
+{
+  while (*src && dst < end)
+    {
+      if (*src == '"')
+	{
+	  if (dst + 2 < end)	/* \\ \" \0 */
+	    *dst++ = '\\';
+	  else
+	    return NULL;
+	}
+      *dst++ = *src++;
+    }
+  if (dst >= end)
+    return NULL;
+
+  *dst = '\0';
+  return dst;
+}
+
 static void
 DoCommandMsg(mp)
 struct msg *mp;
 {
   char *args[MAXARGS];
   int argl[MAXARGS];
-  int n, *lp;
-  register char **pp = args, *p = mp->m.command.cmd;
+  char fullcmd[MAXSTR];
+  register char *fc;
+  int n;
+  register char *p = mp->m.command.cmd;
   struct acluser *user;
 #ifdef MULTIUSER
   extern struct acluser *EffectiveAclUser;	/* acls.c */
@@ -1348,22 +1663,36 @@ struct msg *mp;
   extern struct acluser *users;			/* acls.c */
 #endif
 
-  lp = argl;
   n = mp->m.command.nargs;
   if (n > MAXARGS - 1)
     n = MAXARGS - 1;
-  for (; n > 0; n--)
+  for (fc = fullcmd; n > 0; n--)
     {
-      *pp++ = p;
-      *lp = strlen(p);
-      p += *lp++ + 1;
+      int len = strlen(p);
+      *fc++ = '"';
+      if (!(fc = strncpy_escape_quote(fc, p, fullcmd + sizeof(fullcmd) - 2)))	/* '"' ' ' */
+	{
+	  Msg(0, "Remote command too long.");
+	  queryflag = -1;
+	  return;
+	}
+      p += len + 1;
+      *fc++ = '"';
+      *fc++ = ' ';
     }
-  *pp = 0;
+  if (fc != fullcmd)
+    *--fc = 0;
+  if (Parse(fullcmd, sizeof fullcmd, args, argl) <= 0)
+    {
+      queryflag = -1;
+      return;
+    }
 #ifdef MULTIUSER
   user = *FindUserPtr(mp->m.attach.auser);
   if (user == 0)
     {
       Msg(0, "Unknown user %s tried to send a command!", mp->m.attach.auser);
+      queryflag = -1;
       return;
     }
 #else
@@ -1372,7 +1701,8 @@ struct msg *mp;
 #ifdef PASSWORD
   if (user->u_password && *user->u_password)
     {
-      Msg(0, "User %s has a password, cannot use -X option.", mp->m.attach.auser);
+      Msg(0, "User %s has a password, cannot use remote commands (using -Q or -X option).", mp->m.attach.auser);
+      queryflag = -1;
       return;
     }
 #endif
@@ -1385,6 +1715,13 @@ struct msg *mp;
       {
 	if (!display)
 	  display = fore->w_layer.l_cvlist ? fore->w_layer.l_cvlist->c_display : 0;
+
+	/* If the window is not visibile in any display, then do not use the originating window as
+	 * the foreground window for the command. This way, if there is an existing display, then
+	 * the command will execute from the foreground window of that display. This is necessary so
+	 * that commands that are relative to the window (e.g. 'next' etc.) do the right thing. */
+	if (!fore->w_layer.l_cvlist || !fore->w_layer.l_cvlist->c_display)
+	  fore = NULL;
 	break;
       }
   if (!display)
@@ -1393,7 +1730,15 @@ struct msg *mp;
     {
       int i = -1;
       if (strcmp(mp->m.command.preselect, "-"))
-        i = WindowByNoN(mp->m.command.preselect);
+	{
+	  i = WindowByNoN(mp->m.command.preselect);
+	  if (i < 0 || !wtab[i])
+	    {
+	      Msg(0, "Could not find pre-select window.");
+	      queryflag = -1;
+	      return;
+	    }
+	}
       fore = i >= 0 ? wtab[i] : 0;
     }
   else if (!fore)
@@ -1406,6 +1751,8 @@ struct msg *mp;
 	  fore = FindNiceWindow(fore, 0);
 	}
     }
+  if (!fore)
+    fore = windows;		/* sigh */
 #ifdef MULTIUSER
   EffectiveAclUser = user;
 #endif
@@ -1424,3 +1771,45 @@ struct msg *mp;
   EffectiveAclUser = 0;
 #endif
 }
+
+#ifndef NAMEDPIPE
+
+int
+SendAttachMsg(s, m, fd)
+int s;
+struct msg *m;
+int fd;
+{
+  int r;
+  struct msghdr msg;
+  struct iovec iov;
+  char buf[CMSG_SPACE(sizeof(int))];
+  struct cmsghdr *cmsg;
+
+  iov.iov_base = (char *)m;
+  iov.iov_len = sizeof(*m);
+  bzero(&msg, sizeof(msg));
+  msg.msg_name = 0;
+  msg.msg_namelen = 0;
+  msg.msg_iov = &iov; 
+  msg.msg_iovlen = 1;
+  msg.msg_control = buf;
+  msg.msg_controllen = sizeof(buf);
+  cmsg = CMSG_FIRSTHDR(&msg);
+  cmsg->cmsg_level = SOL_SOCKET;
+  cmsg->cmsg_type = SCM_RIGHTS; 
+  cmsg->cmsg_len = CMSG_LEN(sizeof(int));
+  bcopy(&fd, CMSG_DATA(cmsg), sizeof(int));
+  msg.msg_controllen = cmsg->cmsg_len;
+  while(1)
+    {
+      r = sendmsg(s, &msg, 0);
+      if (r == -1 && errno == EINTR)
+	continue;
+      if (r == -1)
+	return -1;
+      return 0;
+    }
+}
+
+#endif

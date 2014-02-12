@@ -1,11 +1,16 @@
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,19 +19,19 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
  */
 
+#include "config.h"
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/ioctl.h>
 #include <fcntl.h>
 #include <signal.h>
-#include "config.h"
 #include "screen.h"
 #include "extern.h"
 
@@ -46,18 +51,17 @@ static void  screen_builtin_lck __P((void));
 #ifdef DEBUG
 static sigret_t AttacherChld __P(SIGPROTOARG);
 #endif
-#ifdef MULTIUSER
 static sigret_t AttachSigCont __P(SIGPROTOARG);
-#endif
 
 extern int real_uid, real_gid, eff_uid, eff_gid;
 extern char *SockName, *SockMatch, SockPath[];
+extern char HostName[];
 extern struct passwd *ppp;
 extern char *attach_tty, *attach_term, *LoginName, *preselect;
 extern int xflag, dflag, rflag, quietflag, adaptflag;
 extern struct mode attach_Mode;
 extern struct NewWindow nwin_options;
-extern int MasterPid;
+extern int MasterPid, attach_fd;
 
 #ifdef MULTIUSER
 extern char *multi;
@@ -69,7 +73,6 @@ static int multipipe[2];
 #endif
 
 
-#ifdef MULTIUSER
 static int ContinuePlease;
 
 static sigret_t
@@ -79,14 +82,31 @@ AttachSigCont SIGDEFARG
   ContinuePlease = 1;
   SIGRETURN;
 }
-#endif
 
+static int QueryResult;
+
+static sigret_t
+QueryResultSuccess SIGDEFARG
+{
+  QueryResult = 1;
+  SIGRETURN;
+}
+
+static sigret_t
+QueryResultFail SIGDEFARG
+{
+  QueryResult = 2;
+  SIGRETURN;
+}
 
 /*
  *  Send message to a screen backend.
  *  returns 1 if we could attach one, or 0 if none.
  *  Understands  MSG_ATTACH, MSG_DETACH, MSG_POW_DETACH
  *               MSG_CONT, MSG_WINCH and nothing else!
+ *
+ *  if type == MSG_ATTACH and sockets are used, attaches
+ *  tty filedescriptor.
  */
 
 static int
@@ -95,6 +115,11 @@ int s;
 struct msg *m;
 {
   int r, l = sizeof(*m);
+
+#ifndef NAMEDPIPE
+  if (m->type == MSG_ATTACH)
+    return SendAttachMsg(s, m, attach_fd);
+#endif
 
   while(l > 0)
     {
@@ -184,8 +209,13 @@ int how;
     {
       real_uid = multi_uid;
       eff_uid  = own_uid;
+#ifdef HAVE_SETRESUID
+      if (setresuid(multi_uid, own_uid, multi_uid))
+	Panic(errno, "setresuid");
+#else
       xseteuid(multi_uid);
       xseteuid(own_uid);
+#endif
       if (chmod(attach_tty, 0666))
 	Panic(errno, "chmod %s", attach_tty);
       tty_oldmode = tty_mode;
@@ -293,7 +323,7 @@ int how;
     Panic(0, "That screen is %sdetached.", dflag ? "already " : "not ");
 #ifdef REMOTE_DETACH
   if (dflag &&
-      (how == MSG_ATTACH || how == MSG_DETACH || how == MSG_POW_DETACH))
+      (how == MSG_DETACH || how == MSG_POW_DETACH))
     {
       m.m.detach.dpid = getpid();
       strncpy(m.m.detach.duser, LoginName, sizeof(m.m.detach.duser) - 1); 
@@ -304,9 +334,16 @@ int how;
       else
 # endif
 	m.type = MSG_DETACH;
+      /* If there is no password for the session, or the user enters the correct
+       * password, then we get a SIGCONT. Otherwise we get a SIG_BYE */
+      signal(SIGCONT, AttachSigCont);
       if (WriteMessage(lasts, &m))
 	Panic(errno, "WriteMessage");
       close(lasts);
+      while (!ContinuePlease)
+        pause();	/* wait for SIGCONT */
+      signal(SIGCONT, SIG_DFL);
+      ContinuePlease = 0;
       if (how != MSG_ATTACH)
 	return 0;	/* we detached it. jw. */
       sleep(1);	/* we dont want to overrun our poor backend. jw. */
@@ -334,6 +371,18 @@ int how;
   if ((s = getenv("COLUMNS")))
     m.m.attach.columns = atoi(s);
   m.m.attach.encoding = nwin_options.encoding > 0 ? nwin_options.encoding + 1 : 0;
+
+#ifdef REMOTE_DETACH
+#ifdef POW_DETACH
+  if (dflag == 2)
+    m.m.attach.detachfirst = MSG_POW_DETACH;
+  else
+#endif
+  if (dflag)
+    m.m.attach.detachfirst = MSG_DETACH;
+  else
+#endif
+    m.m.attach.detachfirst = MSG_ATTACH;
 
 #ifdef MULTIUSER
   /* setup CONT signal handler to repair the terminal mode */
@@ -369,9 +418,7 @@ int how;
 }
 
 
-#if defined(DEBUG) || !defined(DO_NOT_POLL_MASTER)
 static int AttacherPanic = 0;
-#endif
 
 #ifdef DEBUG
 static sigret_t
@@ -406,7 +453,7 @@ AttacherSigInt SIGDEFARG
 }
 
 /*
- * Unfortunatelly this is also the SIGHUP handler, so we have to
+ * Unfortunately this is also the SIGHUP handler, so we have to
  * check if the backend is already detached.
  */
 
@@ -561,7 +608,6 @@ Attacher()
 #endif
   for (;;)
     {
-#ifndef DO_NOT_POLL_MASTER
       signal(SIGALRM, AttacherSigAlarm);
       alarm(15);
       pause();
@@ -571,10 +617,6 @@ Attacher()
 	  debug1("attacher: Panic! MasterPid %d does not exist.\n", MasterPid);
 	  AttacherPanic++;
 	}
-#else
-      pause();
-#endif
-#if defined(DEBUG) || !defined(DO_NOT_POLL_MASTER)
       if (AttacherPanic)
         {
 	  fcntl(0, F_SETFL, 0);
@@ -582,7 +624,6 @@ Attacher()
 	  printf("\nSuddenly the Dungeon collapses!! - You die...\n");
 	  eexit(1);
         }
-#endif
 #ifdef BSDJOBS
       if (SuspendPlease)
 	{
@@ -715,7 +756,7 @@ LockTerminal()
 	      debug2("Lock: %s: return code %d\n", prg, WEXITSTATUS(wstat));
 	    }
           else
-	    printf(LockEnd);
+	    printf("%s", LockEnd);
         }
     }
   else
@@ -859,8 +900,8 @@ screen_builtin_lck()
 	*cp1 -= 'a' - 'A';
     }
 
-  sprintf(message, "Screen used by %s <%s>.\nPassword:\007",
-          fullname, ppp->pw_name);
+  sprintf(message, "Screen used by %s%s<%s> on %s.\nPassword:\007",
+          fullname, fullname[0] ? " " : "", ppp->pw_name, HostName);
 
   /* loop here to wait for correct password */
   for (;;)
@@ -897,10 +938,11 @@ screen_builtin_lck()
 
 
 void
-SendCmdMessage(sty, match, av)
+SendCmdMessage(sty, match, av, query)
 char *sty;
 char *match;
 char **av;
+int query;
 {
   int i, s;
   struct msg m;
@@ -928,7 +970,7 @@ char **av;
 	exit(1);
     }
   bzero((char *)&m, sizeof(m));
-  m.type = MSG_COMMAND;
+  m.type = query ? MSG_QUERY : MSG_COMMAND;
   if (attach_tty)
     {
       strncpy(m.m_tty, attach_tty, sizeof(m.m_tty) - 1);
@@ -953,7 +995,59 @@ char **av;
   m.m.command.preselect[sizeof(m.m.command.preselect) - 1] = 0;
   m.m.command.apid = getpid();
   debug1("SendCommandMsg writing '%s'\n", m.m.command.cmd);
-  if (WriteMessage(s, &m))
-    Msg(errno, "write");
-  close(s);
+  if (query)
+    {
+      /* Create a server socket so we can get back the result */
+      char *sp = SockPath + strlen(SockPath);
+      char query[] = "-queryX";
+      char c;
+      int r = -1;
+      for (c = 'A'; c <= 'Z'; c++)
+	{
+	  query[6] = c;
+	  strcpy(sp, query);	/* XXX: strncpy? */
+	  if ((r = MakeServerSocket()) >= 0)
+	    break;
+	}
+      if (r < 0)
+	{
+	  for (c = '0'; c <= '9'; c++)
+	    {
+	      query[6] = c;
+	      strcpy(sp, query);
+	      if ((r = MakeServerSocket()) >= 0)
+		break;
+	    }
+	}
+
+      if (r < 0)
+	Panic(0, "Could not create a listening socket to read the results.");
+
+      strncpy(m.m.command.writeback, SockPath, sizeof(m.m.command.writeback) - 1);
+      m.m.command.writeback[sizeof(m.m.command.writeback) - 1] = '\0';
+
+      /* Send the message, then wait for a response */
+      signal(SIGCONT, QueryResultSuccess);
+      signal(SIG_BYE, QueryResultFail);
+      if (WriteMessage(s, &m))
+	Msg(errno, "write");
+      close(s);
+      while (!QueryResult)
+	pause();
+      signal(SIGCONT, SIG_DFL);
+      signal(SIG_BYE, SIG_DFL);
+
+      /* Read the result and spit it out to stdout */
+      ReceiveRaw(r);
+      unlink(SockPath);
+      if (QueryResult == 2)	/* An error happened */
+	exit(1);
+    }
+  else
+    {
+      if (WriteMessage(s, &m))
+	Msg(errno, "write");
+      close(s);
+    }
 }
+

@@ -1,11 +1,19 @@
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2010
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,9 +22,9 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
  */
@@ -28,15 +36,24 @@
 #include "screen.h"
 #include "extern.h"
 
-char version[40];      /* initialised by main() */
+#include "list_generic.h"
+
+char version[60];      /* initialised by main() */
 
 extern struct layer *flayer;
 extern struct display *display, *displays;
 extern struct win *windows;
+extern int maxwin;
 extern char *noargs[];
 extern struct mchar mchar_blank, mchar_so;
+extern int renditions[];
 extern unsigned char *blank;
-extern struct win *wtab[];
+extern struct win **wtab;
+#ifdef MAPKEYS
+extern struct term term[];
+#endif
+
+extern struct LayFuncs ListLf;
 
 static void PadStr __P((char *, int, int, int));
 
@@ -65,13 +82,13 @@ char *myname, *message, *arg;
 #if defined(LOGOUTOK) && defined(UTMPOK)
   printf("-l            Login mode on (update %s), -ln = off.\n", UTMPFILE);
 #endif
-  printf("-list         or -ls. Do nothing, just list our SockDir.\n");
+  printf("-ls [match]   or -list. Do nothing, just list our SockDir [on possible matches].\n");
   printf("-L            Turn on output logging.\n");
   printf("-m            ignore $STY variable, do create a new screen session.\n");
   printf("-O            Choose optimal output rather than exact vt100 emulation.\n");
   printf("-p window     Preselect the named window if it exists.\n");
   printf("-q            Quiet startup. Exits with non-zero return code if unsuccessful.\n");
-  printf("-r            Reattach to a detached screen process.\n");
+  printf("-r [session]  Reattach to a detached screen process.\n");
   printf("-R            Reattach if possible, otherwise start a new session.\n");
   printf("-s shell      Shell to execute rather than $SHELL.\n");
   printf("-S sockname   Name this session <pid>.sockname instead of <pid>.<tty>.<host>.\n");
@@ -81,7 +98,7 @@ char *myname, *message, *arg;
   printf("-U            Tell screen to use UTF-8 encoding.\n");
 #endif
   printf("-v            Print \"Screen version %s\".\n", version);
-  printf("-wipe         Do nothing, just clean up SockDir.\n");
+  printf("-wipe [match] Do nothing, just clean up SockDir [on possible matches].\n");
 #ifdef MULTI
   printf("-x            Attach to a not detached screen. (Multi display mode).\n");
 #endif /* MULTI */
@@ -131,7 +148,8 @@ static struct LayFuncs HelpLf =
   DefClearLine,
   DefRewrite,
   DefResize,
-  DefRestore
+  DefRestore,
+  0
 };
 
 
@@ -161,7 +179,7 @@ struct action *ktabp;
     used[n] = 0;
   mcom = 0;
   mkey = 0;
-  for (key = 0; key < 256; key++)
+  for (key = 0; key < 256 + KMAP_KEYS; key++)
     {
       n = ktabp[key].nr;
       if (n == RC_ILLEGAL)
@@ -314,7 +332,7 @@ helppage()
 	      x += helpdata->inter - !col;
 	      n = helpdata->nact[n];
 	      buf[0] = '\0';
-	      for (key = 0; key < 256; key++)
+	      for (key = 0; key < 256 + KMAP_KEYS; key++)
 		if (ktabp[key].nr == n && ktabp[key].args == noargs && strlen(buf) < sizeof(buf) - 7)
 		  {
 		    strcat(buf, " ");
@@ -333,13 +351,13 @@ helppage()
 	  while ((n = ktabp[helpdata->command_search].nr) == RC_ILLEGAL
 		 || ktabp[helpdata->command_search].args == noargs)
 	    {
-	      if (++helpdata->command_search >= 256)
+	      if (++helpdata->command_search >= 256 + KMAP_KEYS)
 		return -1;
 	    }
 	  buf[0] = '\0';
 	  add_key_to_buf(buf, helpdata->command_search);
-	  PadStr(buf, 4, 0, crow);
-	  AddAction(&ktabp[helpdata->command_search++], 4, crow);
+	  PadStr(buf, 5, 0, crow);
+	  AddAction(&ktabp[helpdata->command_search++], 5, crow);
 	  helpdata->grow++;
 	}
       else
@@ -425,6 +443,17 @@ int key;
     strcpy(buf, "unset");
   else if (key == ' ')
     strcpy(buf, "sp");
+#ifdef MAPKEYS
+  else if (key >= 256)
+    {
+      key = key - 256 + T_CAPS;
+      buf[0] = ':';
+      buf[1] = term[key].tcname[0];
+      buf[2] = term[key].tcname[1];
+      buf[3] = ':';
+      buf[4] = 0;
+    }
+#endif
   else
     buf[AddXChar(buf, key)] = 0;
 }
@@ -476,19 +505,22 @@ static struct LayFuncs CopyrightLf =
   DefClearLine,
   DefRewrite,
   DefResize,
-  DefRestore
+  DefRestore,
+  0
 };
 
 static const char cpmsg[] = "\
 \n\
 Screen version %v\n\
 \n\
-Copyright (c) 1993-2002 Juergen Weigert, Michael Schroeder\n\
+Copyright (c) 2010 Juergen Weigert, Sadrul Habib Chowdhury\n\
+Copyright (c) 2008, 2009 Juergen Weigert, Michael Schroeder, Micah Cowan, Sadrul Habib Chowdhury\n\
+Copyright (c) 1993-2002, 2003, 2005, 2006, 2007 Juergen Weigert, Michael Schroeder\n\
 Copyright (c) 1987 Oliver Laumann\n\
 \n\
 This program is free software; you can redistribute it and/or \
 modify it under the terms of the GNU General Public License as published \
-by the Free Software Foundation; either version 2, or (at your option) \
+by the Free Software Foundation; either version 3, or (at your option) \
 any later version.\n\
 \n\
 This program is distributed in the hope that it will be useful, \
@@ -497,13 +529,79 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the \
 GNU General Public License for more details.\n\
 \n\
 You should have received a copy of the GNU General Public License \
-along with this program (see the file COPYING); if not, write to the \
-Free Software Foundation, Inc., \
-59 Temple Place - Suite 330, Boston, MA  02111-1307, USA.\n\
+along with this program (see the file COPYING); if not, see \
+http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc., \
+51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA.\n\
 \n\
 Send bugreports, fixes, enhancements, t-shirts, money, beer & pizza to \
-screen@uni-erlangen.de\n";
+screen-devel@gnu.org\n\n\n"
 
+"Capabilities:\n"
+
+#ifdef COPY_PASTE
+"+copy "
+#else
+"-copy "
+#endif
+
+#ifdef REMOTE_DETACH
+"+remote-detach "
+#else
+"-remote-detach "
+#endif
+
+#ifdef POW_DETACH
+"+power-detach "
+#else
+"-power-detach "
+#endif
+
+#ifdef MULTI
+"+multi-attach "
+#else
+"-multi-attach "
+#endif
+
+#ifdef MULTIUSER
+"+multi-user "
+#else
+"-multi-user "
+#endif
+
+#ifdef FONT
+"+font "
+#else
+"-font "
+#endif
+
+#ifdef COLORS256
+"+color-256 "
+#elif defined(COLORS16)
+"+color-16 "
+#elif defined(COLOR)
+"+color "
+#else
+"-color "
+#endif
+
+#ifdef UTF8
+"+utf8 "
+#else
+"-utf8 "
+#endif
+
+#ifdef RXVT_OSC
+"+rxvt "
+#else
+"-rxvt "
+#endif
+
+#ifdef BUILTIN_TELNET
+"+builtin-telnet "
+#else
+"-builtin-telnet "
+#endif
+;
 
 static void
 CopyrightProcess(ppbuf, plen)
@@ -659,687 +757,6 @@ int y, xs, xe, isblank;
 }
 
 
-
-/*
-**
-**    here is all the displays stuff 
-**
-*/
-
-#ifdef MULTI
-
-static void DisplaysProcess __P((char **, int *));
-static void DisplaysRedisplayLine __P((int, int, int, int));
-static void displayspage __P((void));
-
-struct displaysdata
-{
-  int dummy_element_for_solaris;
-};
-
-static struct LayFuncs DisplaysLf =
-{
-  DisplaysProcess,
-  HelpAbort,
-  DisplaysRedisplayLine,
-  DefClearLine,
-  DefRewrite,
-  DefResize,
-  DefRestore
-};
-
-static void
-DisplaysProcess(ppbuf, plen)
-char **ppbuf;
-int *plen;
-{
-  int done = 0;
-
-  ASSERT(flayer);
-  while (!done && *plen > 0)
-    {
-      switch (**ppbuf)
-	{
-	case ' ':
-	  displayspage();
-	  break;
-	case '\r':
-	case '\n':
-	  HelpAbort();
-	  done = 1;
-	  break;
-	default:
-	  break;
-	}
-      ++*ppbuf;
-      --*plen;
-    }
-}
-
-
-void
-display_displays()
-{
-  if (flayer->l_width < 10 || flayer->l_height < 5)
-    {
-      LMsg(0, "Window size too small for displays page");
-      return;
-    }
-  if (InitOverlayPage(sizeof(struct displaysdata), &DisplaysLf, 0))
-    return;
-  flayer->l_x = 0;
-  flayer->l_y = flayer->l_height - 1;
-  displayspage();
-}
-
-/*
- * layout of the displays page is as follows:
-
-xterm 80x42      jnweiger@/dev/ttyp4    0(m11)    &rWx
-facit 80x24 nb   mlschroe@/dev/ttyhf   11(tcsh)    rwx
-xterm 80x42      jnhollma@/dev/ttyp5    0(m11)    &R.x
-
-  |     |    |      |         |         |   |     | ¦___ window permissions 
-  |     |    |      |         |         |   |     |      (R. is locked r-only,
-  |     |    |      |         |         |   |     |       W has wlock)
-  |     |    |      |         |         |   |     |___ Window is shared
-  |     |    |      |         |         |   |___ Name/Title of window
-  |     |    |      |         |         |___ Number of window
-  |     |    |      |         |___ Name of the display (the attached device)
-  |     |    |      |___ Username who is logged in at the display
-  |     |    |___ Display is in nonblocking mode. Shows 'NB' if obuf is full.
-  |     |___ Displays geometry as width x height.
-  |___ the terminal type known by screen for this display.
- 
- */
-
-static void
-displayspage()
-{
-  int y, l;
-  char tbuf[80];
-  struct display *d;
-  struct win *w;
-  static char *blockstates[5] = {"nb", "NB", "Z<", "Z>", "BL"};
-
-  LClearAll(flayer, 0);
-
-  leftline("term-type   size         user interface           window", 0);  
-  leftline("---------- ------- ---------- ----------------- ----------", 1);
-  y = 2;
-  
-  for (d = displays; d; d = d->d_next)
-    {
-      w = d->d_fore;
-
-      if (y >= flayer->l_height - 3)
-	break;
-      sprintf(tbuf, "%-10.10s%4dx%-4d%10.10s@%-16.16s%s",
-	      d->d_termname, d->d_width, d->d_height, d->d_user->u_name, 
-	      d->d_usertty, 
-	      (d->d_blocked || d->d_nonblock >= 0) && d->d_blocked <= 4 ? blockstates[d->d_blocked] : "  ");
-
-      if (w)
-	{
-	  l = 10 - strlen(w->w_title);
-	  if (l < 0) 
-	    l = 0;
-	  sprintf(tbuf + strlen(tbuf), "%3d(%.10s)%*s%c%c%c%c",
-		  w->w_number, w->w_title, l, "", 
-		  /* w->w_dlist->next */ 0 ? '&' : ' ', 
-		  /*
-		   * The rwx triple:
-		   * -,r,R	no read, read, read only due to foreign wlock
-		   * -,.,w,W	no write, write suppressed by foreign wlock,
-		   *            write, own wlock
-		   * -,x	no execute, execute
-		   */
-#ifdef MULTIUSER
-		  (AclCheckPermWin(d->d_user, ACL_READ, w) ? '-' : 
-		   ((w->w_wlock == WLOCK_OFF || d->d_user == w->w_wlockuser) ?
-		    'r' : 'R')),
-		  (AclCheckPermWin(d->d_user, ACL_READ, w) ? '-' :
-		   ((w->w_wlock == WLOCK_OFF) ? 'w' :
-		    ((d->d_user == w->w_wlockuser) ? 'W' : 'v'))),
-		  (AclCheckPermWin(d->d_user, ACL_READ, w) ? '-' : 'x')
-#else
-		  'r', 'w', 'x'
-#endif
-	  );
-	}
-      leftline(tbuf, y);
-      y++;
-    }
-  sprintf(tbuf,"[Press Space %s Return to end.]",
-	  1 ? "to refresh;" : "or");
-  centerline(tbuf, flayer->l_height - 2);
-  LaySetCursor();
-}
-
-static void
-DisplaysRedisplayLine(y, xs, xe, isblank)
-int y, xs, xe, isblank;
-{
-  ASSERT(flayer);
-  if (y < 0)
-    {
-      displayspage();
-      return;
-    }
-  if (y != 0 && y != flayer->l_height - 1)
-    return;
-  if (isblank)
-    return;
-  LClearArea(flayer, xs, y, xe, y, 0, 0);
-  /* To be filled in... */
-}
-
-#endif /* MULTI */
-
-
-/*
-**
-**    here is the windowlist
-**
-*/
-
-struct wlistdata;
-
-static void WListProcess __P((char **, int *));
-static void WListRedisplayLine __P((int, int, int, int));
-static void wlistpage __P((void));
-static void WListLine __P((int, int, int, int));
-static void WListLines __P((int, int));
-static void WListMove __P((int, int));
-static void WListUpdate __P((struct win *));
-static int  WListNormalize __P((void));
-static int  WListResize __P((int, int));
-static int  WListNext __P((struct wlistdata *, int, int));
-
-struct wlistdata {
-  int pos;
-  int ypos;
-  int npos;
-  int numwin;
-  int first;
-  int last;
-  int start;
-  int order;
-};
-
-static struct LayFuncs WListLf =
-{
-  WListProcess,
-  HelpAbort,
-  WListRedisplayLine,
-  DefClearLine,
-  DefRewrite,
-  WListResize,
-  DefRestore
-};
-
-static int
-WListResize(wi, he)
-int wi, he;
-{
-  struct wlistdata *wlistdata;
-  if (wi < 10 || he < 5)
-    return -1;
-  wlistdata = (struct wlistdata *)flayer->l_data;
-  flayer->l_width = wi;
-  flayer->l_height = he;
-  wlistdata->numwin = he - 3;
-  if (wlistdata->ypos >= wlistdata->numwin)
-    wlistdata->ypos = wlistdata->numwin - 1;
-  flayer->l_y = he - 1;
-  return 0;
-}
-
-static void
-WListProcess(ppbuf, plen)
-char **ppbuf;
-int *plen;
-{
-  int done = 0;
-  struct wlistdata *wlistdata;
-  struct display *olddisplay = display;
-  int h;
-
-  ASSERT(flayer);
-  wlistdata = (struct wlistdata *)flayer->l_data;
-  h = wlistdata->numwin;
-  while (!done && *plen > 0)
-    {
-      if ((unsigned char)**ppbuf >= '0' && (unsigned char)**ppbuf <= '9')
-	{
-	  int n = (unsigned char)**ppbuf - '0';
-	  int d = 0;
-	  if (n < MAXWIN && wtab[n])
-	    {
-	      int i;
-	      for (d = -wlistdata->npos, i = WListNext(wlistdata, -1, 0); i != n; i = WListNext(wlistdata, i, 1), d++)
-		;
-	    }
-	  if (d)
-	    WListMove(d, -1);
-	}
-      switch ((unsigned char)**ppbuf)
-	{
-	case 0220:	/* up */
-	case 16:	/* ^P like emacs */
-	case 'k':
-	  WListMove(-1, -1);
-	  break;
-	case 0216:	/* down */
-	case 14:	/* ^N like emacs */
-	case 'j':
-	  WListMove(1, -1);
-	  break;
-	case '\025':
-	  WListMove(-(h / 2), wlistdata->ypos);
-	  break;
-	case '\004':
-	  WListMove(h / 2, wlistdata->ypos);
-	  break;
-	case 0002:
-	case 'b':
-	  WListMove(-h, -1);
-	  break;
-	case 0006:
-	case 'f':
-	  WListMove(h, -1);
-	  break;
-	case 0201:	/* home */
-	  WListMove(-wlistdata->pos, -1);
-	  break;
-	case 0205:	/* end */
-	  WListMove(MAXWIN, -1);
-	  break;
-	case '\r':
-	case '\n':
-	case ' ':
-	  done = 1;
-	  h = wlistdata->pos;
-	  if (!display || !wtab[h] || wtab[h] == D_fore || (flayer->l_cvlist && flayer->l_cvlist->c_lnext))
-	    HelpAbort();
-#ifdef MULTIUSER
-	  else if (AclCheckPermWin(D_user, ACL_READ, wtab[h]))
-	    HelpAbort();
-#endif
-	  else
-	    ExitOverlayPage();	/* no need to redisplay */
-	  /* restore display, don't switch wrong user */
-	  display = olddisplay;
-	  SwitchWindow(h);
-	  break;
-	case 0033:
-	case 0007:
-	  h = wlistdata->start;
-	  HelpAbort();
-	  display = olddisplay;
-	  if (h >= 0 && wtab[h])
-	    SwitchWindow(h);
-	  else if (h == -2)
-	    {
-	      struct win *p = FindNiceWindow(display ? D_other : (struct win *)0, 0);
-	      if (p)
-		SwitchWindow(p->w_number);
-	    }
-	  done = 1;
-	  break;
-	default:
-	  break;
-	}
-      ++*ppbuf;
-      --*plen;
-    }
-}
-
-static void
-WListLine(y, i, pos, isblank)
-int y, i;
-int pos;
-int isblank;
-{
-  char *str;
-  int n;
-
-  display = 0;
-  str = MakeWinMsgEv(wliststr, wtab[i], '%', flayer->l_width, (struct event *)0, 0);
-  n = strlen(str);
-  if (i != pos && isblank)
-    while (n && str[n - 1] == ' ')
-      n--;
-  LPutWinMsg(flayer, str, (i == pos || !isblank) ? flayer->l_width : n, i == pos ? &mchar_so : &mchar_blank, 0, y + 2);
-#if 0
-  LPutStr(flayer, str, n, i == pos ? &mchar_so : &mchar_blank, 0, y + 2);
-  if (i == pos || !isblank)
-    while(n < flayer->l_width)
-      LPutChar(flayer, i == pos ? &mchar_so : &mchar_blank, n++, y + 2);
-#endif
-  return;
-}
-
-static int
-WListNext(wlistdata, old, delta)
-struct wlistdata *wlistdata;
-int old, delta;
-{
-  int i, j;
-
-  if (old == MAXWIN)
-    return MAXWIN;
-  if (wlistdata->order == WLIST_NUM)
-    {
-      if (old == -1)
-	{
-	  for (old = 0; old < MAXWIN; old++)
-	    if (wtab[old])
-	      break;
-	  if (old == MAXWIN)
-	    return old;
-	}
-      if (!wtab[old])
-	return MAXWIN;
-      i = old;
-      while (delta > 0 && i < MAXWIN - 1)
-	if (wtab[++i])
-	  {
-	    old = i;
-	    delta--;
-	  }
-      while (delta < 0 && i > 0)
-	if (wtab[--i])
-	  {
-	    old = i;
-	    delta++;
-	  }
-    }
-  else
-    {
-      if (old == -1)
-	old = windows->w_number;
-      if (!wtab[old])
-	return MAXWIN;
-      for (; delta > 0; delta--)
-	if (wtab[old]->w_next)
-	  old = wtab[old]->w_next->w_number;
-      if (delta < 0)
-	{
-	  for (j = i = windows->w_number; j != old; )
-	    {
-	      if (delta++ >= 0 && wtab[i]->w_next)
-		i = wtab[i]->w_next->w_number;
-	      if (wtab[j]->w_next)
-		j = wtab[j]->w_next->w_number;
-	    }
-	  old = i;
-	}
-    }
-  return old;
-}
-
-static void
-WListLines(up, oldpos)
-int up, oldpos;
-{
-  struct wlistdata *wlistdata;
-  int ypos, pos;
-  int y, i, oldi;
-
-  wlistdata = (struct wlistdata *)flayer->l_data;
-  ypos = wlistdata->ypos;
-  pos = wlistdata->pos;
-
-  i = WListNext(wlistdata, pos, -ypos);
-  for (y = 0; y < wlistdata->numwin; y++)
-    {
-      if (i == MAXWIN || !wtab[i])
-	return;
-      if (y == 0)
-	wlistdata->first = i;
-      wlistdata->last = i;
-      if (((i == oldpos || i == pos) && pos != oldpos) || (up > 0 && y >= wlistdata->numwin - up) || (up < 0 && y < -up))
-	WListLine(y, i, pos, i != oldpos);
-      if (i == pos)
-	wlistdata->ypos = y;
-      oldi = i;
-      i = WListNext(wlistdata, i, 1);
-      if (i == MAXWIN || i == oldi)
-	break;
-    }
-}
-
-static int
-WListNormalize()
-{
-  struct wlistdata *wlistdata;
-  int i, oldi, n;
-  int ypos, pos;
-
-  wlistdata = (struct wlistdata *)flayer->l_data;
-  ypos = wlistdata->ypos;
-  pos = wlistdata->pos;
-  if (ypos < 0)
-    ypos = 0;
-  if (ypos >= wlistdata->numwin)
-    ypos = wlistdata->numwin - 1;
-  for (n = 0, oldi = MAXWIN, i = pos; i != MAXWIN && i != oldi && n < wlistdata->numwin; oldi = i, i = WListNext(wlistdata, i, 1))
-    n++;
-  if (ypos < wlistdata->numwin - n)
-    ypos = wlistdata->numwin - n;
-  for (n = 0, oldi = MAXWIN, i = WListNext(wlistdata, -1, 0); i != MAXWIN && i != oldi && i != pos; oldi = i, i = WListNext(wlistdata, i, 1))
-    n++;
-  if (ypos > n)
-    ypos = n;
-  wlistdata->ypos = ypos;
-  wlistdata->npos = n;
-  return ypos;
-}
-
-static void
-WListMove(num, ypos)
-int num;
-int ypos;
-{
-  struct wlistdata *wlistdata;
-  int oldpos, oldypos, oldnpos;
-  int pos, up;
-
-  wlistdata = (struct wlistdata *)flayer->l_data;
-  oldpos = wlistdata->pos;
-  oldypos = wlistdata->ypos;
-  oldnpos = wlistdata->npos;
-  wlistdata->ypos = ypos == -1 ? oldypos + num : ypos;
-  pos = WListNext(wlistdata, oldpos, num);
-  wlistdata->pos = pos;
-  ypos = WListNormalize();
-  up = wlistdata->npos - ypos - (oldnpos - oldypos);
-  if (up)
-    {
-      LScrollV(flayer, up, 2, 2 + wlistdata->numwin - 1, 0);
-      WListLines(up, oldpos);
-      LaySetCursor();
-      return;
-    }
-  if (pos == oldpos)
-    return;
-  WListLine(oldypos, oldpos, pos, 0);
-  WListLine(ypos, pos, pos, 1);
-  LaySetCursor();
-}
-
-static void
-WListRedisplayLine(y, xs, xe, isblank)
-int y, xs, xe, isblank;
-{
-  ASSERT(flayer);
-  if (y < 0)
-    {
-      wlistpage();
-      return;
-    }
-  if (y != 0 && y != flayer->l_height - 1)
-    return;
-  if (!isblank)
-    LClearArea(flayer, xs, y, xe, y, 0, 0);
-}
-
-void
-display_wlist(onblank, order)
-int onblank;
-int order;
-{
-  struct win *p;
-  struct wlistdata *wlistdata;
-
-  if (flayer->l_width < 10 || flayer->l_height < 5)
-    {
-      LMsg(0, "Window size too small for window list page");
-      return;
-    }
-  if (onblank)
-    {
-      debug3("flayer %x %d %x\n", flayer, flayer->l_width, flayer->l_height);
-      if (!display)
-	{
-	  LMsg(0, "windowlist -b: display required");
-	  return;
-	}
-      p = D_fore;
-      SetForeWindow((struct win *)0);
-      Activate(0);
-      if (flayer->l_width < 10 || flayer->l_height < 5)
-	{
-	  LMsg(0, "Window size too small for window list page");
-	  return;
-	}
-      debug3("flayer %x %d %x\n", flayer, flayer->l_width, flayer->l_height);
-    }
-  else
-    p = Layer2Window(flayer);
-  if (InitOverlayPage(sizeof(*wlistdata), &WListLf, 0))
-    return;
-  wlistdata = (struct wlistdata *)flayer->l_data;
-  flayer->l_x = 0;
-  flayer->l_y = flayer->l_height - 1;
-  wlistdata->start = onblank && p ? p->w_number : -1;
-  wlistdata->order = order;
-  wlistdata->pos = p ? p->w_number : WListNext(wlistdata, -1, 0);
-  wlistdata->ypos = wlistdata->npos = 0;
-  wlistdata->numwin= flayer->l_height - 3;
-  wlistpage();
-}
-
-static void
-wlistpage()
-{
-  struct wlistdata *wlistdata;
-  char *str;
-  int pos;
-
-  wlistdata = (struct wlistdata *)flayer->l_data;
-
-  LClearAll(flayer, 0);
-  if (wlistdata->start >= 0 && wtab[wlistdata->start] == 0)
-    wlistdata->start = -2;
-
-  pos = wlistdata->pos;
-  if (wtab[pos] == 0)
-    {
-      if (wlistdata->order == WLIST_MRU)
-        pos = WListNext(wlistdata, -1, wlistdata->npos);
-      else
-	{
-          /* find new position */
-	  while(++pos < MAXWIN)
-	    if (wtab[pos])
-	      break;
-	  if (pos == MAXWIN)
-	    while (--pos > 0)
-	      if (wtab[pos])
-		break;
-	}
-    }
-  wlistdata->pos = pos;
-
-  display = 0;
-  str = MakeWinMsgEv(wlisttit, (struct win *)0, '%', flayer->l_width, (struct event *)0, 0);
-  LPutWinMsg(flayer, str, strlen(str), &mchar_blank, 0, 0);
-  WListNormalize();
-  WListLines(wlistdata->numwin, -1);
-  LaySetCursor();
-}
-
-static void
-WListUpdate(p)
-struct win *p;
-{
-  struct wlistdata *wlistdata;
-  int i, n, y;
-
-  if (p == 0)
-    {
-      wlistpage();
-      return;
-    }
-  wlistdata = (struct wlistdata *)flayer->l_data;
-  n = p->w_number;
-  if (wlistdata->order == WLIST_NUM && (n < wlistdata->first || n > wlistdata->last))
-    return;
-  i = wlistdata->first;
-  for (y = 0; y < wlistdata->numwin; y++)
-    {
-      if (i == n)
-	break;
-      i = WListNext(wlistdata, i, 1);
-    }
-  if (y == wlistdata->numwin)
-    return;
-  WListLine(y, i, wlistdata->pos, 0);
-  LaySetCursor();
-}
-
-void
-WListUpdatecv(cv, p)
-struct canvas *cv;
-struct win *p;
-{
-  if (cv->c_layer->l_layfn != &WListLf)
-    return;
-  CV_CALL(cv, WListUpdate(p));
-}
-
-void
-WListLinkChanged()
-{
-  struct display *olddisplay = display;
-  struct canvas *cv;
-  struct wlistdata *wlistdata;
-
-  for (display = displays; display; display = display->d_next)
-    for (cv = D_cvlist; cv; cv = cv->c_next)
-      {
-        if (cv->c_layer->l_layfn != &WListLf)
-	  continue;
-        wlistdata = (struct wlistdata *)cv->c_layer->l_data;
-	if (wlistdata->order != WLIST_MRU)
-	  continue;
-        CV_CALL(cv, WListUpdate(0));
-      }
-  display = olddisplay;
-}
-
-int
-InWList()
-{
-  if (flayer && flayer->l_layfn == &WListLf)
-    return 1;
-  return 0;
-}
-
-
-
 /*
 **
 **    The bindkey help page
@@ -1347,8 +764,6 @@ InWList()
 */
 
 #ifdef MAPKEYS
-
-extern struct term term[];
 extern struct kmap_ext *kmap_exts;
 extern int kmap_extn;
 extern struct action dmtab[];
@@ -1378,7 +793,8 @@ static struct LayFuncs BindkeyLf =
   DefClearLine,
   DefRewrite,
   DefResize,
-  DefRestore
+  DefRestore,
+  0
 };
 
 
@@ -1575,7 +991,8 @@ static struct LayFuncs ZmodemLf =
   DefClearLine,
   DefRewrite,
   ZmodemResize,
-  DefRestore
+  DefRestore,
+  0
 };
 
 /*ARGSUSED*/

@@ -1,11 +1,16 @@
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,9 +19,9 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
  */
@@ -25,8 +30,6 @@
 #include "config.h"
 #include "screen.h"
 #include "extern.h"
-
-#undef DEBUGG
 
 extern struct display *display, *displays;
 extern int real_uid, real_gid, eff_uid, eff_gid;
@@ -39,6 +42,7 @@ extern int hardstatusemu;
 extern struct action umtab[];
 extern struct action mmtab[];
 extern struct action dmtab[];
+extern struct action ktab[];
 extern struct kmap_ext *kmap_exts;
 extern int kmap_extn;
 extern int DefaultEsc;
@@ -133,7 +137,7 @@ int he;
 
   if ((D_tentry = (char *)malloc(TERMCAP_BUFSIZE + (extra_incap ? strlen(extra_incap) + 1 : 0))) == 0)
     {
-      Msg(0, strnomem);
+      Msg(0, "%s", strnomem);
       return -1;
     }
 
@@ -220,7 +224,8 @@ int he;
       /* ISO2022 */
       if ((D_EA && InStr(D_EA, "\033(B")) || (D_AS && InStr(D_AS, "\033(0")))
 	D_CG0 = 1;
-      if (InStr(D_termname, "xterm") || InStr(D_termname, "rxvt"))
+      if (InStr(D_termname, "xterm") || InStr(D_termname, "rxvt") ||
+	  (D_CKM && InStr(D_CKM, "\033[M")))
 	D_CXT = 1;
       /* "be" seems to be standard for xterms... */
       if (D_CXT)
@@ -255,7 +260,7 @@ int he;
     D_US = D_UE = 0;
   if (D_SG > 0)
     D_SO = D_SE = 0;
-  /* Unfortunatelly there is no 'mg' capability.
+  /* Unfortunately there is no 'mg' capability.
    * For now we think that mg > 0 if sg and ug > 0.
    */
   if (D_UG > 0 && D_SG > 0)
@@ -529,9 +534,9 @@ int map;
 	a1 = 0;
       if (a2 && a2->nr == RC_ILLEGAL)
 	a2 = 0;
-      if (a1 && a1->nr == RC_STUFF && strcmp(a1->args[0], s) == 0)
+      if (a1 && a1->nr == RC_STUFF && a1->args[0] && strcmp(a1->args[0], s) == 0)
 	a1 = 0;
-      if (a2 && a2->nr == RC_STUFF && strcmp(a2->args[0], s) == 0)
+      if (a2 && a2->nr == RC_STUFF && a2->args[0] && strcmp(a2->args[0], s) == 0)
 	a2 = 0;
       domap |= (a1 || a2);
       if (tab == umtab)
@@ -547,7 +552,8 @@ int map;
       else
 	break;
     }
-
+  if (n < KMAP_KEYS)
+    domap = 1;
   if (map == 0 && domap)
     return 0;
   if (map && !domap)
@@ -1190,12 +1196,11 @@ char *s;
   char **ctable;
   int l, c;
 
-  if ((D_xtable = (char ***)malloc(256 * sizeof(char **))) == 0)
+  if ((D_xtable = (char ***)calloc(256, sizeof(char **))) == 0)
     {
-      Msg(0, strnomem);
+      Msg(0, "%s", strnomem);
       return -1;
     }
-  bzero((char *)D_xtable, 256 * sizeof(char **));
 
   while (*s)
     {
@@ -1209,13 +1214,12 @@ char *s;
       templnsub = 0;
       if (D_xtable[curchar] == 0)
         {
-          if ((D_xtable[curchar] = (char **)malloc(257 * sizeof(char *))) == 0)
+          if ((D_xtable[curchar] = (char **)calloc(257, sizeof(char *))) == 0)
 	    {
-	      Msg(0, strnomem);
+	      Msg(0, "%s", strnomem);
 	      FreeTransTable();
 	      return -1;
 	    }
-	  bzero((char *)D_xtable[curchar], 257 * sizeof(char *));
         }
       ctable = D_xtable[curchar];
       for(; *s && *s != ','; s++)
@@ -1246,7 +1250,7 @@ char *s;
 	    l = l * templnsub + templlen;
 	  if ((ctable[c] = (char *)malloc(l + 1)) == 0)
 	    {
-	      Msg(0, strnomem);
+	      Msg(0, "%s", strnomem);
 	      FreeTransTable();
 	      return -1;
 	    }

@@ -1,11 +1,16 @@
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,19 +19,25 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
- * $Id: display.h,v 1.9 1994/05/31 12:31:54 mlschroe Exp $ FAU
+ * $Id$ GNU
  */
+
+#ifndef SCREEN_DISPLAY_H
+#define SCREEN_DISPLAY_H
+
+#include "layout.h"
+#include "canvas.h"
+#include "viewport.h"
 
 #ifdef MAPKEYS
 
 #define KMAP_KEYS (T_OCAPS-T_CAPS)
 #define KMAP_AKEYS (T_OCAPS-T_CURSOR)
-#define KMAP_EXT 50
 
 #define KMAP_NOTIMEOUT 0x4000
 
@@ -39,45 +50,22 @@ struct kmap_ext
   struct action mm;
 };
 
+#else
+
+#define KMAP_KEYS 0
+
 #endif
 
 struct win;			/* forward declaration */
 
-struct canvas
-{
-  struct canvas   *c_next;	/* next canvas on display */
-  struct display  *c_display;	/* back pointer to display */
-  struct viewport *c_vplist;
-  struct layer    *c_layer;	/* layer on this canvas */
-  struct canvas   *c_lnext;	/* next canvas that displays layer */
-  struct layer     c_blank;	/* bottom layer, always blank */
-  int              c_xoff;	/* canvas x offset on display */
-  int              c_yoff;	/* canvas y offset on display */
-  int              c_xs;
-  int              c_xe;
-  int              c_ys;
-  int              c_ye;
-  struct event     c_captev;	/* caption changed event */
-};
-
-struct viewport
-{
-  struct viewport *v_next;	/* next vp on canvas */
-  struct canvas   *v_canvas;	/* back pointer to canvas */
-  int              v_xoff;	/* layer x offset on display */
-  int              v_yoff;	/* layer y offset on display */
-  int              v_xs;	/* vp upper left */
-  int              v_xe;	/* vp upper right */
-  int              v_ys;	/* vp lower left */
-  int              v_ye;	/* vp lower right */
-};
-
 struct display
 {
   struct display *d_next;	/* linked list */
-  struct acluser *d_user;		/* user who owns that display */
+  struct acluser *d_user;	/* user who owns that display */
+  struct canvas d_canvas;	/* our canvas slice */
   struct canvas *d_cvlist;	/* the canvases of this display */
   struct canvas *d_forecv;	/* current input focus */
+  struct layout *d_layout;	/* layout we're using */
   void (*d_processinput) __P((char *, int));
   char *d_processinputdata;	/* data for processinput */
   int d_vpxmin, d_vpxmax;	/* min/max used position on display */
@@ -112,6 +100,8 @@ struct display
   int	d_hstatus;		/* hardstatus used */
   int	d_lp_missing;		/* last character on bot line missing */
   int   d_mouse;		/* mouse mode */
+  int	d_mousetrack;		/* set when user wants to use mouse even when the window
+				   does not */
 #ifdef RXVT_OSC
   int   d_xtermosc[4];		/* osc used */
 #endif
@@ -126,6 +116,7 @@ struct display
   int	d_status_lasty;		/*   before status was displayed */
   int   d_status_obuflen;	/* saved obuflen */ 
   int   d_status_obuffree;	/* saved obuffree */ 
+  int	d_status_obufpos;	/* end of status position in obuf */
   struct event d_statusev;	/* timeout event */
   struct event d_hstatusev;	/* hstatus changed event */
   int	d_kaablamm;		/* display kaablamm msg */
@@ -198,7 +189,9 @@ extern struct display TheDisplay;
 
 #define D_user		DISPLAY(d_user)
 #define D_username	(DISPLAY(d_user) ? DISPLAY(d_user)->u_name : 0)
+#define D_canvas	DISPLAY(d_canvas)
 #define D_cvlist	DISPLAY(d_cvlist)
+#define D_layout	DISPLAY(d_layout)
 #define D_forecv	DISPLAY(d_forecv)
 #define D_processinput	DISPLAY(d_processinput)
 #define D_processinputdata	DISPLAY(d_processinputdata)
@@ -234,6 +227,7 @@ extern struct display TheDisplay;
 #define D_hstatus	DISPLAY(d_hstatus)
 #define D_lp_missing	DISPLAY(d_lp_missing)
 #define D_mouse		DISPLAY(d_mouse)
+#define D_mousetrack	DISPLAY(d_mousetrack)
 #define D_xtermosc	DISPLAY(d_xtermosc)
 #define D_lpchar	DISPLAY(d_lpchar)
 #define D_status	DISPLAY(d_status)
@@ -246,6 +240,7 @@ extern struct display TheDisplay;
 #define D_status_lasty	DISPLAY(d_status_lasty)
 #define D_status_obuflen	DISPLAY(d_status_obuflen)
 #define D_status_obuffree	DISPLAY(d_status_obuffree)
+#define D_status_obufpos	DISPLAY(d_status_obufpos)
 #define D_statusev	DISPLAY(d_statusev)
 #define D_hstatusev	DISPLAY(d_hstatusev)
 #define D_kaablamm	DISPLAY(d_kaablamm)
@@ -317,23 +312,6 @@ do				\
   }				\
 while (0)
 
-#define CV_CALL(cv, cmd)			\
-{						\
-  struct display *olddisplay = display;		\
-  struct layer *oldflayer = flayer;		\
-  struct layer *l = cv->c_layer;		\
-  struct canvas *cvlist = l->l_cvlist;		\
-  struct canvas *cvlnext = cv->c_lnext;		\
-  flayer = l;					\
-  l->l_cvlist = cv;				\
-  cv->c_lnext = 0;				\
-  cmd;						\
-  flayer = oldflayer;				\
-  l->l_cvlist = cvlist;				\
-  cv->c_lnext = cvlnext;			\
-  display = olddisplay;				\
-}
-
 #define STATUS_OFF	0
 #define STATUS_ON_WIN	1
 #define STATUS_ON_HS	2
@@ -343,3 +321,6 @@ while (0)
 #define HSTATUS_MESSAGE		2
 #define HSTATUS_HS		3
 #define HSTATUS_ALWAYS		(1<<2)
+
+#endif /* SCREEN_DISPLAY_H */
+

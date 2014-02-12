@@ -1,11 +1,16 @@
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,9 +19,9 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
  */
@@ -24,6 +29,7 @@
 #include <sys/types.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <pwd.h>
 
 #ifndef SIGINT
 # include <signal.h>
@@ -69,7 +75,7 @@ register char *str1, *str2;
     {
       len2 = strlen(str2);
       if ((cp = realloc(str2, (unsigned) len1 + len2 + add_colon + 1)) == NULL)
-	Panic(0, strnomem);
+	Panic(0, "%s", strnomem);
       bcopy(cp, cp + len1 + add_colon, len2 + 1);
     }
   else
@@ -77,8 +83,8 @@ register char *str1, *str2;
       if (len1 == 0)
 	return 0;
       if ((cp = malloc((unsigned) len1 + add_colon + 1)) == NULL)
-	Panic(0, strnomem);
-      cp[len1 + add_colon] = '\0'; 
+	Panic(0, "%s", strnomem);
+      cp[len1 + add_colon] = '\0';
     }
   bcopy(str1, cp, len1);
   if (add_colon)
@@ -93,6 +99,42 @@ char *rcfile;
 {
   char buf[256];
   char *p;
+
+  /* Tilde prefix support courtesy <hesso@pool.math.tu-berlin.de>,
+   * taken from a Debian patch. */
+  if (rcfile && *rcfile == '~')
+    {
+      static char rcfilename_tilde_exp[MAXPATHLEN+1];
+      char *slash_position = strchr(rcfile, '/');
+      if (slash_position == rcfile+1)
+        {
+          char *home = getenv("HOME");
+          if (!home)
+            {
+              Msg(0, "%s: source: tilde expansion failed", rc_name);
+              return NULL;
+            }
+          snprintf(rcfilename_tilde_exp, MAXPATHLEN, "%s/%s", home, rcfile+2);
+        }
+      else if (slash_position)
+        {
+          struct passwd *p;
+          *slash_position = 0;
+          p = getpwnam(rcfile+1);
+          if (!p)
+            {
+              Msg(0, "%s: source: tilde expansion failed for user %s", rc_name, rcfile+1);
+              return NULL;
+            }
+          snprintf(rcfilename_tilde_exp, MAXPATHLEN, "%s/%s", p->pw_dir, slash_position+1);
+        }
+      else
+        {
+          Msg(0, "%s: source: illegal tilde expression.", rc_name);
+          return NULL;
+        }
+      rcfile = rcfilename_tilde_exp;
+    }
 
   if (rcfile)
     {
@@ -128,9 +170,10 @@ char *rcfile;
  * 1) rcfilename = "/etc/screenrc"
  * 2) rcfilename = RcFileName
  */
-void
-StartRc(rcfilename)
+int
+StartRc(rcfilename, nopanic)
 char *rcfilename;
+int nopanic;
 {
   register int argc, len;
   register char *p, *cp;
@@ -149,23 +192,25 @@ char *rcfilename;
 
   rc_name = findrcfile(rcfilename);
 
-  if ((fp = secfopen(rc_name, "r")) == NULL)
+  if (rc_name == NULL || (fp = secfopen(rc_name, "r")) == NULL)
     {
-      if (!rc_recursion && RcFileName && !strcmp(RcFileName, rc_name))
+      const char *rc_nonnull = rc_name ? rc_name : rcfilename;
+      if (!rc_recursion && RcFileName && !strcmp(RcFileName, rc_nonnull))
 	{
           /*
            * User explicitly gave us that name,
            * this is the only case, where we get angry, if we can't read
            * the file.
            */
-	  debug3("StartRc: '%s','%s', '%s'\n", RcFileName, rc_name, rcfilename);
-          Panic(0, "Unable to open \"%s\".", rc_name);
-	  /* NOTREACHED */
+	  debug3("StartRc: '%s','%s', '%s'\n", RcFileName, rc_name ? rc_name : "(null)", rcfilename);
+          if (!nopanic) Panic(0, "Unable to open \"%s\".", rc_nonnull);
+	  /* possibly NOTREACHED */
 	}
-      debug1("StartRc: '%s' no good. ignored\n", rc_name);
-      Free(rc_name);
+      debug1("StartRc: '%s' no good. ignored\n", rc_nonnull);
+      if (rc_name)
+	Free(rc_name);
       rc_name = oldrc_name;
-      return;
+      return 1;
     }
   while (fgets(buf, sizeof buf, fp) != NULL)
     {
@@ -186,7 +231,7 @@ char *rcfilename;
 	  if (argc != 3)
 	    {
 	      AddStr("\r\n");
-	      Flush();
+	      Flush(0);
 	    }
 	}
       else if (strcmp(args[0], "sleep") == 0)
@@ -238,7 +283,7 @@ char *rcfilename;
 	  if (rc_recursion <= 10)
 	    {
 	      rc_recursion++;
-	      StartRc(args[1]);
+	      (void)StartRc(args[1], 0);
 	      rc_recursion--;
 	    }
 	}
@@ -246,6 +291,7 @@ char *rcfilename;
   fclose(fp);
   Free(rc_name);
   rc_name = oldrc_name;
+  return 0;
 }
 
 void
@@ -258,23 +304,25 @@ char *rcfilename;
 
   rc_name = findrcfile(rcfilename);
 
-  if ((fp = secfopen(rc_name, "r")) == NULL)
+  if (rc_name == NULL || (fp = secfopen(rc_name, "r")) == NULL)
     {
+      const char *rc_nonnull = rc_name ? rc_name : rcfilename;
       if (rc_recursion)
-        Msg(errno, "%s: source %s", oldrc_name, rc_name);
-      else if (RcFileName && !strcmp(RcFileName, rc_name))
+        Msg(errno, "%s: source %s", oldrc_name, rc_nonnull);
+      else if (RcFileName && !strcmp(RcFileName, rc_nonnull))
 	{
     	  /*
  	   * User explicitly gave us that name, 
 	   * this is the only case, where we get angry, if we can't read
 	   * the file.
 	   */
-  	  debug3("FinishRc:'%s','%s','%s'\n", RcFileName, rc_name, rcfilename);
-          Panic(0, "Unable to open \"%s\".", rc_name);
+  	  debug3("FinishRc:'%s','%s','%s'\n", RcFileName, rc_name ? rc_name : "(null)", rcfilename);
+          Panic(0, "Unable to open \"%s\".", rc_nonnull);
 	  /* NOTREACHED */
 	}
-      debug1("FinishRc: '%s' no good. ignored\n", rc_name);
-      Free(rc_name);
+      debug1("FinishRc: '%s' no good. ignored\n", rc_nonnull);
+      if (rc_name)
+	Free(rc_name);
       rc_name = oldrc_name;
       return;
     }
@@ -480,6 +528,7 @@ int dump;
 		}
 	      if (dump == DUMP_SCROLLBACK)
 		{
+#ifdef COPY_PASTE
 		  for (i = 0; i < fore->w_histheight; i++)
 		    {
 		      p = (char *)(WIN(i)->image);
@@ -489,6 +538,7 @@ int dump;
 			putc(p[j], f);
 		      putc('\n', f);
 		    }
+#endif
 		}
 	      for (i = 0; i < fore->w_height; i++)
 		{
@@ -577,7 +627,7 @@ int *lenp;
   if ((buf = malloc(size)) == NULL)
     {
       close(i);
-      Msg(0, strnomem);
+      Msg(0, "%s", strnomem);
       return NULL;
     }
   errno = 0;
@@ -779,7 +829,7 @@ char *cmd;
 #ifdef SIGPIPE
       signal(SIGPIPE, SIG_DFL);
 #endif
-      execl("/bin/sh", "sh", "-c", cmd, 0);
+      execl("/bin/sh", "sh", "-c", cmd, (char *)0);
       Panic(errno, "/bin/sh");
     default:
       break;
@@ -827,7 +877,7 @@ char **cmdv;
 #endif
       execvp(*cmdv, cmdv);
       close(1);
-      Panic(errno, *cmdv);
+      Panic(errno, "%s", *cmdv);
     default:
       break;
     }

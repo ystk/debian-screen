@@ -24,14 +24,19 @@ sed -e '1,26d' \
 chmod -w $1
 exit 0
 
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *  
  * This program is distributed in the hope that it will be useful,
@@ -40,9 +45,9 @@ exit 0
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
  */
@@ -76,7 +81,7 @@ exit 0
 #endif
 
 #include "config.h"
-#ifdef SVR4
+#ifdef HAVE_STROPTS_H
 #include <sys/stropts.h>	/* for I_POP */
 #endif
 
@@ -562,7 +567,9 @@ XIF{VDISCARD}	np->tio.c_cc[VDISCARD] = VDISABLE;
 XIF{VLNEXT}	np->tio.c_cc[VLNEXT] = VDISABLE;
 XIF{VSTATUS}	np->tio.c_cc[VSTATUS] = VDISABLE;
 XIF{VSUSP}	np->tio.c_cc[VSUSP] = VDISABLE;
-XIF{VERASE}	np->tio.c_cc[VERASE] = VDISABLE;
+ /* Set VERASE to DEL, rather than VDISABLE, to avoid libvte
+    "autodetect" issues. */
+XIF{VERASE}	np->tio.c_cc[VERASE] = 0x7f;
 XIF{VKILL}	np->tio.c_cc[VKILL] = VDISABLE;
 # ifdef HPUX_LTCHARS_HACK
   np->m_ltchars.t_suspc  = VDISABLE;
@@ -622,6 +629,10 @@ XIF{VSTOP}	D_NewMode.tio.c_cc[VSTOP] = VDISABLE;
       D_NewMode.tio.c_iflag &= ~IXON;
     }
 # ifdef POSIX
+#  ifdef TCOON
+  if (!on)
+    tcflow(D_userfd, TCOON);
+#  endif
   if (tcsetattr(D_userfd, TCSANOW, &D_NewMode.tio))
 # else
   if (ioctl(D_userfd, TCSETAW, (char *)&D_NewMode.tio) != 0)

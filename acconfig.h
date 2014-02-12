@@ -5,7 +5,7 @@
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,12 +14,12 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
- * $Id: config.h.in,v 1.12 1994/05/31 12:31:36 mlschroe Exp $ FAU
+ * $Id$ GNU
  */
 
 
@@ -35,7 +35,7 @@
  * Maximum of simultaneously allowed windows per screen session.
  */
 #ifndef MAXWIN
-# define MAXWIN 40
+# define MAXWIN 100
 #endif
 
 /*
@@ -59,15 +59,6 @@
 #define SOCKDIR_IS_LOCAL_TO_HOST
 
 /*
- * Screen sources two startup files. First a global file with a path
- * specified here, second your local $HOME/.screenrc
- * Don't define this, if you don't want it.
- */
-#ifndef ETCSCREENRC
-# define ETCSCREENRC "/usr/local/etc/screenrc"
-#endif
-
-/*
  * Screen can look for the environment variable $SYSSCREENRC and -if it
  * exists- load the file specified in that variable as global screenrc.
  * If you want to enable this feature, define ALLOW_SYSSCREENRC to one (1).
@@ -75,14 +66,6 @@
  */
 #define ALLOW_SYSSCREENRC 1
 
-/*
- * Screen needs encoding files for the translation of utf8
- * into some encodings, e.g. JIS, BIG5.
- * Only needed if FONT, ENCODINGS and UTF8 are defined.
- */
-#ifndef SCREENENCODINGS
-# define SCREENENCODINGS "/usr/local/lib/screen/encodings"
-#endif
 /*
  * Define CHECKLOGIN to force Screen users to enter their Unix password
  * in addition to the screen password.
@@ -425,12 +408,6 @@
 #endif
 
 /*
- * Define HAVE_DIRENT_H if your system has <dirent.h> instead of
- * <sys/dir.h>
- */
-#undef HAVE_DIRENT_H
-
-/*
  * If your system has getutent(), pututline(), etc. to write to the
  * utmp file, define GETUTENT.
  */
@@ -458,6 +435,7 @@
  * define HAVE_SETREUID. Otherwise screen will use a forked process to
  * safely create output files without retaining any special privileges.
  */
+#undef HAVE_SETRESUID
 #undef HAVE_SETREUID
 
 /*
@@ -465,6 +443,11 @@
  * HAVE_SETEUID.
  */
 #undef HAVE_SETEUID
+
+/*
+ * execvpe is now defined in some systems.
+ */
+#undef HAVE_EXECVPE
 
 /*
  * If you want the "time" command to display the current load average
@@ -515,11 +498,6 @@
 #undef USEVARARGS
 
 /*
- * If your system has strerror() define this.
- */
-#undef HAVE_STRERROR
-
-/*
  * If the select return value doesn't treat a descriptor that is
  * usable for reading and writing as two hits, define SELECT_BROKEN.
  */
@@ -548,6 +526,16 @@
 #undef USESETENV
 
 /*
+ * If setenv() takes 3 arguments define HAVE_SETENV_3
+ */
+#undef HAVE_SETENV_3
+
+/*
+ * If setenv() takes 2 arguments define HAVE_SETENV_2
+ */
+#undef HAVE_SETENV_2
+
+/*
  * If your system does not come with a setenv()/putenv()/getenv()
  * functions, you may bring in our own code by defining NEEDPUTENV.
  */
@@ -558,63 +546,6 @@
  * builtin lock to work properly, define SHADOWPW.
  */
 #undef SHADOWPW
-
-/*
- * If you are on a SYS V machine that restricts filename length to 14 
- * characters, you may need to enforce that by setting NAME_MAX to 14
- */
-#undef NAME_MAX		/* KEEP_UNDEF_HERE override system value */
-#undef NAME_MAX
-
-/*
- * define HAVE_RENAME if your system has a rename() function
- */
-#undef HAVE_RENAME
-
-/*
- * define HAVE__EXIT if your system has the _exit() call.
- */
-#undef HAVE__EXIT
-
-/*
- * define HAVE_LSTAT if your system has symlinks and the lstat() call.
- */
-#undef HAVE_LSTAT
-
-/*
- * define HAVE_UTIMES if your system has the utimes() call.
- */
-#undef HAVE_UTIMES
-
-/*
- * define HAVE_FCHOWN if your system has the fchown() call.
- */
-#undef HAVE_FCHOWN
-
-/*
- * define HAVE_FCHMOD if your system has the fchmod() call.
- */
-#undef HAVE_FCHMOD
-
-/*
- * define HAVE_VSNPRINTF if your system has vsnprintf() (GNU lib).
- */
-#undef HAVE_VSNPRINTF
-
-/*
- * define HAVE_GETCWD if your system has the getcwd() call.
- */
-#undef HAVE_GETCWD
-
-/*
- * define HAVE_SETLOCALE if your system has the setlocale() call.
- */
-#undef HAVE_SETLOCALE
-
-/*
- * define HAVE_STRFTIME if your system has the strftime() call.
- */
-#undef HAVE_STRFTIME
 
 /*
  * define HAVE_NL_LANGINFO if your system has the nl_langinfo() call
@@ -640,16 +571,6 @@
  * device and support the ptsname(), grantpt(), unlockpt() functions.
  */
 #undef HAVE_SVR4_PTYS
-
-/*
- * define HAVE_GETPT if you have the getpt() function.
- */
-#undef HAVE_GETPT
-
-/*
- * define HAVE_OPENPTY if your system has the openpty() call.
- */
-#undef HAVE_OPENPTY
 
 /* 
  * define PTYRANGE0 and or PTYRANGE1 if you want to adapt screen

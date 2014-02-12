@@ -1,11 +1,16 @@
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,9 +19,9 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
  */
@@ -102,7 +107,7 @@ static int utmpfd = -1;
 #endif
 
 
-# if defined(GETUTENT) && (!defined(SVR4) || defined(__hpux))
+# if defined(GETUTENT) && (!defined(SVR4) || defined(__hpux)) && ! defined(__CYGWIN__)
 #  if defined(hpux) /* cruel hpux release 8.0 */
 #   define pututline _pututline
 #  endif /* hpux */
@@ -263,7 +268,7 @@ InitUtmp()
   if ((utmpfd = open(UtmpName, O_RDWR)) == -1)
     {
       if (errno != EACCES)
-	Msg(errno, UtmpName);
+	Msg(errno, "%s", UtmpName);
       debug("InitUtmp failed.\n");
       utmpok = 0;
       return;
@@ -581,7 +586,11 @@ struct win *wi;
     }
 #endif
   setutent();
+#ifndef __CYGWIN__
   return pututline(u) != 0;
+#else
+  return 1;
+#endif
 }
 
 static void
@@ -589,7 +598,7 @@ makedead(u)
 struct utmp *u;
 {
   u->ut_type = DEAD_PROCESS;
-#if !defined(linux) || defined(EMPTY)
+#if (!defined(linux) || defined(EMPTY)) && !defined(__CYGWIN__)
   u->ut_exit.e_termination = 0;
   u->ut_exit.e_exit = 0;
 #endif
@@ -604,6 +613,7 @@ struct utmp *u;
 char *line, *user;
 int pid;
 {
+  time_t now;
   u->ut_type = USER_PROCESS;
   strncpy(u->ut_user, user, sizeof(u->ut_user));
   /* Now the tricky part... guess ut_id */
@@ -618,7 +628,10 @@ int pid;
 #endif /* sgi */
   strncpy(u->ut_line, line, sizeof(u->ut_line));
   u->ut_pid = pid;
-  (void)time((time_t *)&u->ut_time);
+  /* must use temp variable because of NetBSD/sparc64, where
+   * ut_xtime is long(64) but time_t is int(32) */
+  (void)time(&now);
+  u->ut_time = now;
 }
 
 static slot_t
@@ -726,9 +739,11 @@ struct utmp *u;
 char *line, *user;
 int pid;
 {
+  time_t now;
   strncpy(u->ut_line, line, sizeof(u->ut_line));
   strncpy(u->ut_name, user, sizeof(u->ut_name));
-  (void)time((time_t *)&u->ut_time);
+  (void)time(&now);
+  u->ut_time = now;
 }
 
 static slot_t

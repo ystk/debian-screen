@@ -1,18 +1,18 @@
 dnl Process this file with autoconf to produce a configure script.
 dnl
-dnl $Id: configure.in,v 1.18 1994/09/06 16:59:54 mlschroe Exp $ FAU
+dnl $Id$ GNU
 dnl
 dnl Many thanks to David MacKenzie for writing autoconf and
 dnl providing a sample configure.in file for screen.
 dnl
-AC_REVISION($Revision: 1.18 $)dnl
+AC_REVISION($Revision$)dnl
 AC_INIT(screen.c)
 AC_CONFIG_HEADER(config.h)
 
 dnl
 dnl Define some useful macros
 dnl
-AC_DEFUN(AC_PROGRAM_SOURCE,
+AC_DEFUN([AC_PROGRAM_SOURCE],
 [AC_REQUIRE([AC_PROG_CPP])AC_PROVIDE([$0])cat > conftest.c <<EOF
 #include "confdefs.h"
 [$1]
@@ -45,6 +45,7 @@ AC_PROG_CC
 AC_PROG_CPP
 AC_PROG_GCC_TRADITIONAL
 AC_ISC_POSIX
+AC_USE_SYSTEM_EXTENSIONS
 
 AC_TRY_RUN(main(){exit(0);},,[
 if test $CC != cc ; then
@@ -93,7 +94,12 @@ AC_ARG_ENABLE(socket-dir,
 	AC_MSG_RESULT(yes)
 	AC_MSG_CHECKING(for the socket dir)
 	SOCKDIR="(eff_uid ? \"/tmp/uscreens\" : \"/tmp/screens\")"
-	AC_ARG_WITH(socket-dir, [  --with-socket-dir=path  where to put the per-user sockets], [ SOCKDIR="\"${withval}\"" ])
+	AC_ARG_WITH(socket-dir, [  --with-socket-dir=path  where to put the per-user sockets], [ 
+	  case "${withval}" in
+	    *\"*) SOCKDIR="${withval}" ;;
+	    *) SOCKDIR="\"${withval}\"" ;;
+	  esac
+        ])
 	AC_MSG_RESULT(${SOCKDIR})
 	AC_DEFINE_UNQUOTED(SOCKDIR, $SOCKDIR)
     ]
@@ -203,6 +209,7 @@ AC_TRY_LINK([#include <utmpx.h>
 [AC_CHECK_HEADER(dwarf.h, AC_DEFINE(SVR4) AC_DEFINE(BUGGYGETLOGIN),
 [AC_CHECK_HEADER(elf.h, AC_DEFINE(SVR4) AC_DEFINE(BUGGYGETLOGIN))])]
 ,LIBS="$oldlibs")
+AC_CHECK_HEADERS([stropts.h string.h strings.h])
 
 AC_CHECKING(for Solaris 2.x)
 AC_EGREP_CPP(yes,
@@ -252,15 +259,15 @@ int y = TIOCNOTTY;
 ], AC_NOTE(- you have jobcontrol) AC_DEFINE(BSDJOBS), AC_NOTE(- you don't have jobcontrol))
 
 dnl
-dnl    ****  setreuid(), seteuid()  ****
+dnl    ****  setresuid(), setreuid(), seteuid()  ****
 dnl
+AC_CHECKING(setresuid)
+AC_TRY_LINK(,[
+setresuid(0, 0, 0);
+], AC_DEFINE(HAVE_SETRESUID))
 AC_CHECKING(setreuid)
 AC_TRY_LINK(,[
-#ifdef __hpux
-setresuid(0, 0, 0);
-#else
 setreuid(0, 0);
-#endif
 ], AC_DEFINE(HAVE_SETREUID))
 dnl
 dnl seteuid() check:
@@ -276,6 +283,13 @@ seteuid_is_broken(0);
 seteuid(0);
 #endif
 ], AC_DEFINE(HAVE_SETEUID))
+
+dnl execvpe
+AC_CHECKING(execvpe)
+AC_TRY_LINK(,[
+    execvpe(0, 0, 0);
+], AC_DEFINE(HAVE_EXECVPE)
+CFLAGS="$CFLAGS -D_GNU_SOURCE")
 
 dnl
 dnl    ****  select()  ****
@@ -294,7 +308,14 @@ dnl
 
 AC_CHECKING(fifos)
 AC_TRY_RUN([
+/* For select - According to POSIX 1003.1-2001 */
+#include <sys/select.h>
+
+/* For select - According to earlier standards */
+#include <sys/time.h>
 #include <sys/types.h>
+#include <unistd.h>
+
 #include <sys/stat.h>
 #include <fcntl.h>
 
@@ -310,13 +331,10 @@ char *fin = "/tmp/conftest$$";
 main()
 {
   struct stat stb;
-#ifdef FD_SET
   fd_set f;
-#else
-  int f;
-#endif
 
   (void)alarm(5);
+  unlink(fin);
 #ifdef POSIX
   if (mkfifo(fin, 0777))
 #else
@@ -348,11 +366,7 @@ main()
 	exit(1);
       exit(0);
     }
-#ifdef FD_SET
   FD_SET(0, &f);
-#else
-  f = 1;
-#endif
   if (select(1, &f, 0, 0, 0) == -1)
     exit(1);
   exit(0);
@@ -364,10 +378,16 @@ rm -f /tmp/conftest*
 if test -n "$fifo"; then
 AC_CHECKING(for broken fifo implementation)
 AC_TRY_RUN([
-#include <sys/types.h>
-#include <fcntl.h>
+/* For select - According to POSIX 1003.1-2001 */
+#include <sys/select.h>
+
+/* For select - According to earlier standards */
 #include <sys/time.h>
+#include <sys/types.h>
+#include <unistd.h>
+
 #include <sys/stat.h>
+#include <fcntl.h>
 
 #ifndef O_NONBLOCK
 #define O_NONBLOCK O_NDELAY
@@ -381,11 +401,7 @@ char *fin = "/tmp/conftest$$";
 main()
 {
   struct timeval tv;
-#ifdef FD_SET
   fd_set f;
-#else
-  int f;
-#endif
 
 #ifdef POSIX
   if (mkfifo(fin, 0600))
@@ -396,11 +412,7 @@ main()
   close(0);
   if (open(fin, O_RDONLY|O_NONBLOCK))
     exit(1);
-#ifdef FD_SET
   FD_SET(0, &f);
-#else
-  f = 1;
-#endif
   tv.tv_sec = 1;
   tv.tv_usec = 0;
   if (select(1, &f, 0, 0, &tv))
@@ -420,10 +432,18 @@ dnl
 
 AC_CHECKING(sockets)
 AC_TRY_RUN([
+/* For select - According to POSIX 1003.1-2001 */
+#include <sys/select.h>
+
+/* For select - According to earlier standards */
+#include <sys/time.h>
 #include <sys/types.h>
+#include <unistd.h>
+
+#include <sys/stat.h>
+#include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/un.h>
-#include <fcntl.h>
 
 char *son = "/tmp/conftest$$";
 
@@ -431,11 +451,7 @@ main()
 {
   int s1, s2, l;
   struct sockaddr_un a;
-#ifdef FD_SET
   fd_set f;
-#else
-  int f;
-#endif
 
   (void)alarm(5);
   if ((s1 = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
@@ -460,11 +476,7 @@ main()
   close(0);
   if (accept(s1, &a, &l))
     exit(1);
-#ifdef FD_SET
   FD_SET(0, &f);
-#else
-  f = 1;
-#endif
   if (select(1, &f, 0, 0, 0) == -1)
     exit(1);
   exit(0);
@@ -476,7 +488,14 @@ rm -f /tmp/conftest*
 if test -n "$sock"; then
 AC_CHECKING(socket implementation)
 AC_TRY_RUN([
+/* For select - According to POSIX 1003.1-2001 */
+#include <sys/select.h>
+
+/* For select - According to earlier standards */
+#include <sys/time.h>
 #include <sys/types.h>
+#include <unistd.h>
+
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -518,8 +537,7 @@ if test -n "$fifo"; then
     elif test -n "$fifobr"; then
       AC_NOTE(- as your fifos are broken lets use the sockets.)
     else
-      AC_NOTE(- both sockets and fifos usable. let's take fifos.)
-      AC_DEFINE(NAMEDPIPE)
+      AC_NOTE(- both sockets and fifos usable. let's take sockets.)
     fi
   else
     AC_NOTE(- using named pipes, of course)
@@ -537,7 +555,14 @@ dnl
 
 AC_CHECKING(select return value)
 AC_TRY_RUN([
+/* For select - According to POSIX 1003.1-2001 */
+#include <sys/select.h>
+
+/* For select - According to earlier standards */
+#include <sys/time.h>
 #include <sys/types.h>
+#include <unistd.h>
+
 #include <sys/stat.h>
 #include <fcntl.h>
 
@@ -555,11 +580,7 @@ char *nam = "/tmp/conftest$$";
 
 main()
 {
-#ifdef FD_SET
   fd_set f;
-#else
-  int f;
-#endif
 
 #ifdef __FreeBSD__
 /* From Andrew A. Chernov (ache@astral.msk.su):
@@ -591,11 +612,7 @@ main()
 {
   int s1, s2, l;
   struct sockaddr_un a;
-#ifdef FD_SET
   fd_set f;
-#else
-  int f;
-#endif
 
   (void)alarm(5);
   if ((s1 = socket(AF_UNIX, SOCK_STREAM, 0)) == -1)
@@ -623,11 +640,7 @@ main()
 #endif
 
 
-#ifdef FD_SET
   FD_SET(0, &f);
-#else
-  f = 1;
-#endif
   if (select(1, &f, 0, 0, 0) == -1)
     exit(1);
   if (select(1, &f, &f, 0, 0) != 2)
@@ -658,10 +671,13 @@ AC_TRY_LINK(,tgetent((char *)0, (char *)0);,,
 LIBS="-ltermlib $olibs"
 AC_CHECKING(libtermlib)
 AC_TRY_LINK(,tgetent((char *)0, (char *)0);,,
+LIBS="-lncursesw $olibs"
+AC_CHECKING(libncursesw)
+AC_TRY_LINK(,tgetent((char *)0, (char *)0);,,
 LIBS="-lncurses $olibs"
 AC_CHECKING(libncurses)
 AC_TRY_LINK(,tgetent((char *)0, (char *)0);,,
-AC_MSG_ERROR(!!! no tgetent - no screen))))))
+AC_MSG_ERROR(!!! no tgetent - no screen)))))))
 
 AC_TRY_RUN([
 main()
@@ -1193,17 +1209,7 @@ main() {
   exit(0); /* libc version works properly.  */
 }], AC_DEFINE(USEMEMCPY))
 
-AC_MSG_CHECKING(long file names)
-(echo 1 > /tmp/conftest9012345) 2>/dev/null
-(echo 2 > /tmp/conftest9012346) 2>/dev/null
-val=`cat /tmp/conftest9012345 2>/dev/null`
-if test -f /tmp/conftest9012345 && test "$val" = 1; then
-AC_MSG_RESULT(yes)
-else
-AC_MSG_RESULT(no)
-AC_DEFINE(NAME_MAX, 14)
-fi
-rm -f /tmp/conftest*
+AC_SYS_LONG_FILE_NAMES
 
 AC_MSG_CHECKING(for vsprintf)
 AC_TRY_LINK(,[vsprintf(0,0,0);], AC_MSG_RESULT(yes);AC_DEFINE(USEVARARGS), AC_MSG_RESULT(no))
@@ -1211,11 +1217,32 @@ AC_TRY_LINK(,[vsprintf(0,0,0);], AC_MSG_RESULT(yes);AC_DEFINE(USEVARARGS), AC_MS
 AC_HEADER_DIRENT
 
 AC_MSG_CHECKING(for setenv)
-AC_TRY_LINK(,[setenv((char *)0,(char *)0);unsetenv((char *)0);], AC_MSG_RESULT(yes);AC_DEFINE(USESETENV),
-AC_MSG_RESULT(no)
-AC_MSG_CHECKING(for putenv)
-AC_TRY_LINK(,[putenv((char *)0);unsetenv((char *)0);], AC_MSG_RESULT(yes) ,  AC_MSG_RESULT(no);AC_DEFINE(NEEDPUTENV)
-))
+if test -z "$ac_setenv_args"; then
+    AC_TRY_LINK(
+    [#include <stdlib.h>],
+    [
+        setenv((char *) 0, (char *) 0, 0);
+    ], ac_setenv_args=3)
+fi
+if test -z "$ac_setenv_args"; then
+    AC_TRY_LINK(
+    [#include <stdlib.h>],
+    [
+        setenv((char *) 0, (char *) 0);
+    ], ac_setenv_args=2)
+fi
+if test -n "$ac_setenv_args"; then
+    AC_DEFINE(USESETENV)
+    if test "$ac_setenv_args" = 3; then
+        AC_DEFINE(HAVE_SETENV_3)
+    elif test "$ac_setenv_args" = 2; then
+        AC_DEFINE(HAVE_SETENV_2)
+    fi
+else
+    AC_MSG_RESULT(no)
+    AC_MSG_CHECKING(for putenv)
+    AC_TRY_LINK(,[putenv((char *)0);unsetenv((char *)0);], AC_MSG_RESULT(yes) ,  AC_MSG_RESULT(no);AC_DEFINE(NEEDPUTENV))
+fi
 AC_MSG_CHECKING([for nl_langinfo(CODESET)])
 AC_TRY_LINK([
 #include <langinfo.h>
@@ -1268,23 +1295,10 @@ test -n "$seqptx" && LIBS="-ltermcap -lc -lsocket -linet -lnsl -lsec -lseq"
 
 AC_TRY_RUN(main(){exit(0);},,AC_MSG_ERROR(Can't run the compiler - internal error. Sorry.))
 
-ETCSCREENRC="\"/usr/local/etc/screenrc\""
-if test -n "$prefix"; then
-ETCSCREENRC="\"$prefix/etc/screenrc\""
-fi
+ETCSCREENRC=
 AC_MSG_CHECKING(for the global screenrc file)
-AC_ARG_WITH(sys-screenrc, [  --with-sys-screenrc=path  where to put the global screenrc file], [ ETCSCREENRC="\"${withval}\"" ])
-AC_DEFINE_UNQUOTED(ETCSCREENRC,$ETCSCREENRC)
-AC_MSG_RESULT($ETCSCREENRC)
-
-SCREENENCODINGS="\"/usr/local/lib/screen/utf8encodings\""
-if test -n "$datadir"; then
-eval SCREENENCODINGS="$datadir/screen/utf8encodings"
-SCREENENCODINGS="\"$SCREENENCODINGS\""
-fi
-AC_MSG_CHECKING(for the utf8-encodings location)
-AC_DEFINE_UNQUOTED(SCREENENCODINGS,$SCREENENCODINGS)
-AC_MSG_RESULT($SCREENENCODINGS)
+AC_ARG_WITH(sys-screenrc, [  --with-sys-screenrc=path to the global screenrc file], [ ETCSCREENRC="${withval}" ])
+AC_SUBST(ETCSCREENRC)
 
 AC_OUTPUT(Makefile doc/Makefile, [[
 # a hook for preserving undef directive in config.h
