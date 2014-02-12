@@ -1,11 +1,16 @@
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,14 +19,15 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
  */
 
 #include <sys/types.h>
+#include <ctype.h>
 
 #include "config.h"
 #include "screen.h"
@@ -63,7 +69,7 @@ extern struct mchar mchar_so;
 int pastefont = 1;
 #endif
 
-static struct LayFuncs MarkLf =
+struct LayFuncs MarkLf =
 {
   MarkProcess,
   MarkAbort,
@@ -71,7 +77,8 @@ static struct LayFuncs MarkLf =
   DefClearLine,
   MarkRewrite,
   DefResize,
-  DefRestore
+  DefRestore,
+  0
 };
 
 int join_with_cr =  0;
@@ -134,6 +141,59 @@ int y;
   return x;
 }
 
+/*
+ * nextchar sets *xp to the num-th occurrence of the target in the line.
+ *
+ * Returns -1 if the target doesn't appear num times, 0 otherwise.
+ */
+static int
+nextchar(int *xp, int *yp, int direction, char target, int num)
+{
+  int width;  /* width of the current window. */
+  int x;      /* x coordinate of the current cursor position. */
+  int step;   /* amount to increment x (+1 or -1) */
+  int adjust; /* Final adjustment of cursor position. */
+  char *displayed_line; /* Line in which search takes place. */
+ 
+  debug("nextchar\n");
+ 
+  x = *xp;
+  step = 1;
+  adjust = 0;
+  width = fore->w_width;
+  displayed_line = (char *)WIN(*yp) -> image;
+ 
+  switch(direction) {
+    case 't':
+      adjust = -1; /* fall through */
+    case 'f':
+      step = 1;
+      break;
+    case 'T':
+      adjust = 1; /* fall through */
+    case 'F':
+      step = -1;
+      break;
+    default:
+      ASSERT(0);
+  }
+ 
+  x += step;
+ 
+  debug1("ml->image = %s\n", displayed_line);
+  debug2("num = %d, width = %d\n",num, width);
+  debug2("x = %d target = %c\n", x, target );
+ 
+  for ( ;x>=0 && x <= width; x += step) {
+    if (displayed_line[x] == target) {
+      if (--num == 0) {
+        *xp = x + adjust;
+        return 0;
+      }
+    }
+  }
+  return -1;
+}
 
 /*
  *  nextword calculates the cursor position of the num'th word.
@@ -148,6 +208,8 @@ int y;
 #define NW_ENDOFWORD	(1<<1)
 #define NW_MUSTMOVE	(1<<2)
 #define NW_BIG		(1<<3)
+
+
 
 static void
 nextword(xp, yp, flags, num)
@@ -442,6 +504,7 @@ MarkRoutine()
   if (InitOverlayPage(sizeof(*markdata), &MarkLf, 1))
     return;
   flayer->l_encoding = fore->w_encoding;
+  flayer->l_mode = 1;
   markdata = (struct markdata *)flayer->l_data;
   markdata->md_user = D_user;	/* XXX: Correct? */
   markdata->md_window = fore;
@@ -500,21 +563,24 @@ int *inlenp;
   in_mark = 1;
   while (in_mark && (inlen /* || extrap */))
     {
-/*
-      if (extrap)
+      unsigned char ch = (unsigned char )*pt++;
+      inlen--;
+      if (flayer->l_mouseevent.start)
 	{
-	  od = *extrap++;
-	  if (*extrap == 0)
-	    extrap = 0;
+	  int r = LayProcessMouse(flayer, ch);
+	  if (r == -1)
+	    LayProcessMouseSwitch(flayer, 0);
+	  else
+	    {
+	      if (r)
+		ch = 0222;
+	      else
+		continue;
+	    }
 	}
-      else
-*/
-	{
-          od = mark_key_tab[(int)(unsigned char)*pt++];
-          inlen--;
-	}
+      od = mark_key_tab[(int)ch];
       rep_cnt = markdata->rep_cnt;
-      if (od >= '0' && od <= '9')
+      if (od >= '0' && od <= '9' && !markdata->f_cmd.flag)
         {
 	  if (rep_cnt < 1001 && (od != '0' || rep_cnt != 0))
 	    {
@@ -534,8 +600,51 @@ int *inlenp;
 	}
       cx = markdata->cx;
       cy = markdata->cy;
+
+      if (markdata -> f_cmd.flag) {
+        debug2("searching for %c:%d\n",od,rep_cnt);
+        markdata->f_cmd.flag = 0;
+        markdata->rep_cnt = 0;
+
+	if (isgraph (od)) {
+	  markdata->f_cmd.target = od;
+	  rep_cnt = (rep_cnt) ? rep_cnt : 1;
+	  nextchar(&cx, &cy, markdata->f_cmd.direction, od, rep_cnt );
+	  revto(cx, cy);
+	  continue;
+	}
+      }
+
+processchar:
       switch (od)
-	{
+        {
+	case 'f': /* fall through */
+	case 'F': /* fall through */
+	case 't': /* fall through */
+	case 'T': /* fall through */
+	  /*
+	   * Set f_cmd to do a search on the next key stroke.
+	   * If we break, rep_cnt will be reset, so we
+	   * continue instead. It might be cleaner to
+	   * store the rep_count in f_cmd and
+	   * break here so later followon code will be
+	   * hit.
+	   */
+	  markdata->f_cmd.flag = 1;
+	  markdata->f_cmd.direction = od;
+	  debug("entering char search\n");
+	  continue;
+	case ';':
+	case ',':
+	  if (!markdata->f_cmd.target)
+	    break;
+	  if (!rep_cnt)
+	    rep_cnt = 1;
+	  nextchar(&cx, &cy,
+	      od == ';' ? markdata->f_cmd.direction : (markdata->f_cmd.direction ^ 0x20),
+	      markdata->f_cmd.target, rep_cnt );
+	  revto(cx, cy);
+	  break;
 	case 'o':
 	case 'x':
 	  if (!markdata->second)
@@ -663,7 +772,7 @@ int *inlenp;
             LGotoPos(flayer, cx, W2D(cy));
 	  break;
 	case '@':
-	  /* it may be usefull to have a key that does nothing */
+	  /* it may be useful to have a key that does nothing */
 	  break;
 	case '%':
 	  rep_cnt--;
@@ -794,6 +903,11 @@ int *inlenp;
 	case 'n':
 	  Search(0);
 	  break;
+	case 'N':
+	  markdata->isdir = -markdata->isdir;
+	  Search(0);
+	  markdata->isdir = -markdata->isdir;
+	  break;
 	case 'y':
 	case 'Y':
 	  if (markdata->second == 0)
@@ -923,6 +1037,7 @@ int *inlenp;
 		  LAY_CALL_UP(LRefreshAll(flayer, 0));
 		}
 	      ExitOverlayPage();
+	      WindowChanged(fore, 'P');
 	      if (append_mode)
 		LMsg(0, "Appended %d characters to buffer",
 		    newcopylen);
@@ -933,6 +1048,39 @@ int *inlenp;
 	      in_mark = 0;
 	      break;
 	    }
+
+	case 0222:
+	  if (flayer->l_mouseevent.start)
+	    {
+	      int button = flayer->l_mouseevent.buffer[0];
+	      if (button == 'a')
+		{
+		  /* Scroll down */
+		  od = 'j';
+		}
+	      else if (button == '`')
+		{
+		  /* Scroll up */
+		  od = 'k';
+		}
+	      else if (button == ' ')
+		{
+		  /* Left click */
+		  cx = flayer->l_mouseevent.buffer[1];
+		  cy = D2W(flayer->l_mouseevent.buffer[2]);
+		  revto(cx, cy);
+		  od = ' ';
+		}
+	      else
+		od = 0;
+	      LayProcessMouseSwitch(flayer, 0);
+	      if (od)
+		goto processchar;
+	    }
+	  else
+	    LayProcessMouseSwitch(flayer, 1);
+	  break;
+
 	default:
 	  MarkAbort();
 	  LMsg(0, "Copy mode aborted");
@@ -1009,6 +1157,8 @@ int tx, ty, line;
 
   if (markdata->second == 0)
     {
+      flayer->l_x = tx;
+      flayer->l_y = W2D(ty);
       LGotoPos(flayer, tx, W2D(ty));
       return;
     }
@@ -1105,6 +1255,8 @@ int tx, ty, line;
 #endif
 	}
     }
+  flayer->l_x = tx;
+  flayer->l_y = W2D(ty);
   LGotoPos(flayer, tx, W2D(ty));
 }
 
@@ -1132,6 +1284,7 @@ MarkAbort()
       rem(markdata->x1, markdata->y1, markdata->cx, markdata->cy, redisp, (char *)0, yend);
     }
   ExitOverlayPage();
+  WindowChanged(fore, 'P');
 }
 
 
@@ -1336,14 +1489,6 @@ int n;
   while (i-- > 0)
     MarkRedisplayLine(i, 0, flayer->l_width - 1, 1);
   return n;
-}
-
-int
-InMark()
-{
-  if (flayer && flayer->l_layfn == &MarkLf)
-    return 1;
-  return 0;
 }
 
 void

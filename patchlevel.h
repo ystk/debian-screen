@@ -1,11 +1,16 @@
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,12 +19,12 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
- * $Id: patchlevel.h,v 1.17 1994/05/31 12:32:35 mlschroe Exp $ FAU
+ * $Id$ GNU
  */
 
 /****************************************************************
@@ -519,14 +524,15 @@
  * 05.12.2003  4.00.02 fixed a bug in the ansi parser. fixed execs
  *                     on ttys. fixed hardstatus line on blanked screen.
  *                     -- DISTRIBUTED
- * 23.10.2006  4.00.03 fixed two bug in combining characters handling
- *                     (cstone & Rich Felker).
- *                     -- DISTRIBUTED
+ * 11.10.2004, 4.00.03jw handle StartRc errors nonfatal if due to a msg.
+ * 12.10.2004, 4.00.03jw1 let docu of 'split' 'focus' 'remove' and 'only' refer to each other.
+ * 01.11.2004, 4.00.03jw2 zombie command has new option 'onerror'
+ * 2005-12-19, 4.00.03jw3 syntax error.
  */
 
-#define ORIGIN "FAU"
+#define ORIGIN "GNU"
 #define REV 4
-#define VERS 0
-#define PATCHLEVEL 3
-#define DATE "23-Oct-06"
-#define STATE ""
+#define VERS 1
+#define PATCHLEVEL 0
+#define DATE "2-May-06"
+#define STATE "devel"

@@ -1,11 +1,16 @@
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,12 +19,12 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
- * $Id: extern.h,v 1.18 1994/05/31 12:31:57 mlschroe Exp $ FAU
+ * $Id$ GNU
  */
 
 #if !defined(__GNUC__) || __GNUC__ < 2
@@ -30,23 +35,32 @@
 /* screen.c */
 extern int   main __P((int, char **));
 extern sigret_t SigHup __P(SIGPROTOARG);
-extern void  eexit __P((int));
+extern void  eexit __P((int)) __attribute__((__noreturn__));
 extern void  Detach __P((int));
 extern void  Hangup __P((void));
 extern void  Kill __P((int, int));
 #ifdef USEVARARGS
-extern void  Msg __P((int, char *, ...)) __attribute__((format(printf, 2, 3)));
-extern void  Panic __P((int, char *, ...)) __attribute__((format(printf, 2, 3)));
+extern void  Msg __P((int, const char *, ...)) __attribute__((format(printf, 2, 3)));
+extern void  Panic __P((int, const char *, ...)) __attribute__((format(printf, 2, 3))) __attribute__((__noreturn__));
+extern void  QueryMsg __P((int, const char *, ...)) __attribute__((format(printf, 2, 3)));
+extern void  Dummy __P((int, const char *, ...)) __attribute__((format(printf, 2, 3)));
 #else
 extern void  Msg __P(());
 extern void  Panic __P(());
+extern void  QueryMsg __P(());
+extern void  Dummy __P(());
 #endif
 extern void  Finit __P((int));
 extern void  MakeNewEnv __P((void));
 extern char *MakeWinMsg __P((char *, struct win *, int));
 extern char *MakeWinMsgEv __P((char *, struct win *, int, int, struct event *, int));
-extern int   PutWinMsg __P((char *, int, int));
-extern void  WindowDied __P((struct win *));
+extern int   AddWinMsgRend __P((const char *, int));
+extern void  PutWinMsg __P((char *, int, int));
+#ifdef BSDWAIT
+extern void  WindowDied __P((struct win *, union wait, int));
+#else
+extern void  WindowDied __P((struct win *, int, int));
+#endif
 extern void  setbacktick __P((int, int, int, char **));
 
 /* ansi.c */
@@ -65,7 +79,7 @@ extern void  WindowChanged __P((struct win *, int));
 extern int   MFindUsedLine __P((struct win *, int, int));
 
 /* fileio.c */
-extern void  StartRc __P((char *));
+extern int   StartRc __P((char *, int));
 extern void  FinishRc __P((char *));
 extern void  RcLine __P((char *, int));
 extern FILE *secfopen __P((char *, char *));
@@ -113,7 +127,7 @@ extern void  ISearch __P((int));
 
 /* input.c */
 extern void  inp_setprompt __P((char *, char *));
-extern void  Input __P((char *, int, int, void (*)(char *, int, char *), char *));
+extern void  Input __P((char *, int, int, void (*)(char *, int, char *), char *, int));
 extern int   InInput __P((void));
 
 /* help.c */
@@ -122,7 +136,6 @@ extern void  display_help __P((char *, struct action *));
 extern void  display_copyright __P((void));
 extern void  display_displays __P((void));
 extern void  display_bindkey __P((char *, struct action *));
-extern void  display_wlist __P((int, int));
 extern int   InWList __P((void));
 extern void  WListUpdatecv __P((struct canvas *, struct win *));
 extern void  WListLinkChanged __P((void));
@@ -146,7 +159,9 @@ extern void  CloseDevice __P((struct win *));
 #ifdef ZMODEM
 extern void  zmodem_abort __P((struct win *, struct display *));
 #endif
+#ifndef HAVE_EXECVPE
 extern void  execvpe __P((char *, char **, char **));
+#endif
 
 /* utmp.c */
 #ifdef UTMPOK
@@ -185,7 +200,7 @@ extern void  ProcessInput2 __P((char *, int));
 #endif
 extern void  DoProcess __P((struct win *, char **, int *, struct paster *));
 extern void  DoAction  __P((struct action *, int));
-extern int   FindCommnr __P((char *));
+extern int   FindCommnr __P((const char *));
 extern void  DoCommand __P((char **, int *));
 extern void  Activate __P((int));
 extern void  KillWindow __P((struct win *));
@@ -229,7 +244,7 @@ extern void  FreeTransTable __P((void));
 extern int   Attach __P((int));
 extern void  Attacher __P((void));
 extern sigret_t AttacherFinit __P(SIGPROTOARG);
-extern void  SendCmdMessage __P((char *, char *, char **));
+extern void  SendCmdMessage __P((char *, char *, char **, int));
 
 /* display.c */
 extern struct display *MakeDisplay __P((char *, char *, char *, int, int, struct mode *));
@@ -281,19 +296,12 @@ extern void  RemoveStatus __P((void));
 extern int   ResizeDisplay __P((int, int));
 extern void  AddStr __P((char *));
 extern void  AddStrn __P((char *, int));
-extern void  Flush __P((void));
+extern void  Flush __P((int));
 extern void  freetty __P((void));
 extern void  Resize_obuf __P((void));
 #ifdef AUTO_NUKE
 extern void  NukePending __P((void));
 #endif
-extern void  SetCanvasWindow __P((struct canvas *, struct win *));
-extern int   MakeDefaultCanvas __P((void));
-extern int   AddCanvas __P((void));
-extern void  RemCanvas __P((void));
-extern void  OneCanvas __P((void));
-extern int   RethinkDisplayViewports __P((void));
-extern void  RethinkViewportOffsets __P((struct canvas *));
 #ifdef RXVT_OSC
 extern void  ClearAllXtermOSC __P((void));
 extern void  SetXtermOSC __P((int, char *));
@@ -335,6 +343,8 @@ extern int   chsock __P((void));
 extern void  ReceiveMsg __P((void));
 extern void  SendCreateMsg __P((char *, struct NewWindow *));
 extern int   SendErrorMsg __P((char *, char *));
+extern int   SendAttachMsg __P((int, struct msg *, int));
+extern void  ReceiveRaw __P((int));
 
 /* misc.c */
 extern char *SaveStr __P((const char *));
@@ -344,7 +354,7 @@ extern char *InStr __P((char *, const char *));
 extern char *strerror __P((int));
 #endif
 extern void  centerline __P((char *, int));
-extern void  leftline __P((char *, int));
+extern void  leftline __P((char *, int, struct mchar *));
 extern char *Filename __P((char *));
 extern char *stripdev __P((char *));
 #ifdef NEED_OWN_BCOPY
@@ -436,13 +446,15 @@ extern void  LKeypadMode __P((struct layer *, int));
 extern void  LCursorkeysMode __P((struct layer *, int));
 extern void  LMouseMode __P((struct layer *, int));
 #ifdef USEVARARGS
-extern void  LMsg __P((int, char *, ...)) __attribute__((format(printf, 2, 3)));
+extern void  LMsg __P((int, const char *, ...)) __attribute__((format(printf, 2, 3)));
 #else
 extern void  LMsg __P(());
 #endif
 extern void  KillLayerChain __P((struct layer *));
 extern int   InitOverlayPage __P((int, struct LayFuncs *, int));
 extern void  ExitOverlayPage __P((void));
+extern int   LayProcessMouse __P((struct layer *, unsigned char));
+extern void  LayProcessMouseSwitch __P((struct layer *, int));
 
 /* teln.c */
 #ifdef BUILTIN_TELNET
@@ -458,7 +470,7 @@ extern void  TelStatus __P((struct win *, char *, int));
 #endif
 
 /* nethack.c */
-extern char *DoNLS __P((char *));
+extern const char *DoNLS __P((const char *));
 
 /* encoding.c */
 #ifdef ENCODINGS

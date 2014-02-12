@@ -1,4 +1,12 @@
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2010
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
@@ -14,7 +22,7 @@
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -23,9 +31,9 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
  */
@@ -50,7 +58,7 @@
 
 #include "config.h"
 
-#ifdef SVR4
+#ifdef HAVE_STROPTS_H
 # include <sys/stropts.h>
 #endif
 
@@ -113,6 +121,8 @@ int VBellWait, MsgWait, MsgMinWait, SilenceWait;
 extern struct acluser *users;
 extern struct display *displays, *display; 
 
+extern struct LayFuncs MarkLf;
+
 
 extern int visual_bell;
 #ifdef COPY_PASTE
@@ -124,6 +134,7 @@ extern char DefaultShell[];
 extern char *zmodem_sendcmd;
 extern char *zmodem_recvcmd;
 #endif
+extern struct layout *layout_last;
 
 
 char *ShellProg;
@@ -158,6 +169,7 @@ int nversion;	/* numerical version, used for secondary DA */
 /* the attacher */
 struct passwd *ppp;
 char *attach_tty;
+int attach_fd = -1;
 char *attach_term;
 char *LoginName;
 struct mode attach_Mode;
@@ -198,6 +210,7 @@ char *wlisttit;
 int auto_detach = 1;
 int iflag, rflag, dflag, lsflag, quietflag, wipeflag, xflag;
 int cmdflag;
+int queryflag = -1;
 int adaptflag;
 
 #ifdef MULTIUSER
@@ -211,20 +224,24 @@ int tty_oldmode = -1;
 #endif
 
 char HostName[MAXSTR];
-int MasterPid;
+int MasterPid, PanicPid;
 int real_uid, real_gid, eff_uid, eff_gid;
 int default_startup;
-int ZombieKey_destroy, ZombieKey_resurrect;
+int ZombieKey_destroy, ZombieKey_resurrect, ZombieKey_onerror;
 char *preselect = NULL;		/* only used in Attach() */
 
 #ifdef UTF8
 char *screenencodings;
 #endif
 
+#ifdef DW_CHARS
+int cjkwidth;
+#endif
+
 #ifdef NETHACK
 int nethackflag = 0;
 #endif
-int maxwin = MAXWIN;
+int maxwin;
 
 
 struct layer *flayer;
@@ -329,6 +346,21 @@ pw_try_again:
   return ppp;
 }
 
+static char *
+locale_name(void)
+{
+  static char *s;
+
+  if (!s)
+    {
+      s = getenv("LC_ALL");
+      if (s == NULL)
+        s = getenv("LC_CTYPE");
+      if (s == NULL)
+        s = getenv("LANG");
+    }
+  return s;
+}
 
 int
 main(ac, av)
@@ -356,6 +388,7 @@ char **av;
 #ifdef MULTIUSER
   char *sockp;
 #endif
+  char *sty = 0;
 
 #if (defined(AUX) || defined(_AUX_SOURCE)) && defined(POSIX)
   setcompat(COMPAT_POSIX|COMPAT_BSDPROT); /* turn on seteuid support */
@@ -377,8 +410,8 @@ char **av;
 #ifdef DEBUG
   opendebug(1, 0);
 #endif
-  sprintf(version, "%d.%.2d.%.2d%s (%s) %s", REV, VERS,
-	  PATCHLEVEL, STATE, ORIGIN, DATE);
+  snprintf(version, 59, "%d.%.2d.%.2d%s (%s%s) %s", REV, VERS,
+	  PATCHLEVEL, STATE, ORIGIN, GIT_REV, DATE);
   nversion = REV * 10000 + VERS * 100 + PATCHLEVEL;
   debug2("-- screen debug started %s (%s)\n", *av, version);
 #ifdef POSIX
@@ -436,10 +469,10 @@ char **av;
   screenlogfile = SaveStr("screenlog.%n");
   logtstamp_string = SaveStr("-- %n:%t -- time-stamp -- %M/%d/%y %c:%s --\n");
   hstatusstring = SaveStr("%h");
-  captionstring = SaveStr("%3n %t");
+  captionstring = SaveStr("%4n %t");
   timestring = SaveStr("%c:%s %M %d %H%? %l%?");
-  wlisttit = SaveStr("Num Name%=Flags");
-  wliststr = SaveStr("%3n %t%=%f");
+  wlisttit = SaveStr(" Num Name%=Flags");
+  wliststr = SaveStr("%4n %t%=%f");
 #ifdef COPY_PASTE
   BufferFile = SaveStr(DEFAULT_BUFFERFILE);
 #endif
@@ -467,6 +500,9 @@ char **av;
 #ifdef UTF8
   InitBuiltinTabs();
   screenencodings = SaveStr(SCREENENCODINGS);
+#endif
+#ifdef DW_CHARS
+  cjkwidth = 0;
 #endif
   nwin = nwin_undef;
   nwin_options = nwin_undef;
@@ -648,6 +684,10 @@ char **av;
 		case 'q':
 		  quietflag = 1;
 		  break;
+		case 'Q':
+		  queryflag = 1;
+		  cmdflag = 1;
+		  break;
 		case 'r':
 		case 'R':
 #ifdef MULTI
@@ -727,17 +767,12 @@ char **av;
   real_gid = getgid();
   eff_uid = geteuid();
   eff_gid = getegid();
-  if (eff_uid != real_uid)
-    {		
-      /* if running with s-bit, we must install a special signal
-       * handler routine that resets the s-bit, so that we get a
-       * core file anyway.
-       */
+
 #ifdef SIGBUS /* OOPS, linux has no bus errors! */
-      signal(SIGBUS, CoreDump);
+  signal(SIGBUS, CoreDump);
 #endif /* SIGBUS */
-      signal(SIGSEGV, CoreDump);
-    }
+  signal(SIGSEGV, CoreDump);
+
 
 #ifdef USE_LOCALE
   setlocale(LC_ALL, "");
@@ -755,14 +790,50 @@ char **av;
 # else
 #  ifdef UTF8
       char *s;
-      if (((s = getenv("LC_ALL")) || (s = getenv("LC_CTYPE")) ||
-          (s = getenv("LANG"))) && InStr(s, "UTF-8"))
+      if ((s = locale_name()) && InStr(s, "UTF-8"))
         nwin_options.encoding = UTF8;
 #  endif
       debug1("environment says encoding=%d\n", nwin_options.encoding);
 #endif
     }
+# ifdef DW_CHARS
+  {
+    char *s;
+    if ((s = locale_name()))
+    {
+      if(!strncmp(s, "zh_", 3) || !strncmp(s, "ja_", 3) || !strncmp(s, "ko_", 3))
+      {
+        cjkwidth = 1;
+      }
+    }
+  }
 #endif
+#endif
+  if (nwin_options.aka)
+    {
+#ifdef ENCODINGS
+      if (nwin_options.encoding > 0)
+        {
+          size_t len = strlen(nwin_options.aka);
+          size_t newsz;
+          char *newbuf = malloc(3 * len);
+          if (!newbuf)
+            Panic(0, "%s", strnomem);
+          newsz = RecodeBuf((unsigned char *)nwin_options.aka, len,
+                            nwin_options.encoding, 0, (unsigned char *)newbuf);
+          newbuf[newsz] = '\0';
+          nwin_options.aka = newbuf;
+        }
+      else
+#endif
+        {
+          /* If we just use the original value from av,
+             subsequent shelltitle invocations will attempt to free
+             space we don't own... */
+          nwin_options.aka = SaveStr(nwin_options.aka);
+        }
+    }
+  
   if (SockMatch && strlen(SockMatch) >= MAXSTR)
     Panic(0, "Ridiculously long socketname - try again.");
   if (cmdflag && !rflag && !dflag && !xflag)
@@ -803,6 +874,12 @@ char **av;
     }
   ShellArgs[0] = ShellProg;
   home = getenv("HOME");
+  if (!mflag && !SockMatch)
+    {
+      sty = getenv("STY");
+      if (sty && *sty == 0)
+	sty = 0;
+    }
 
 #ifdef NETHACK
   if (!(nethackflag = (getenv("NETHACKOPTIONS") != NULL)))
@@ -821,8 +898,6 @@ char **av;
   own_uid = multi_uid = real_uid;
   if (SockMatch && (sockp = index(SockMatch, '/')))
     {
-      if (eff_uid)
-        Panic(0, "Must run suid root for multiuser support.");
       *sockp = 0;
       multi = SockMatch;
       SockMatch = sockp + 1;
@@ -843,6 +918,9 @@ char **av;
 	  detached = 0;
 	  multiattach = 1;
 	}
+      /* Special case: effective user is multiuser. */
+      if (eff_uid && (multi_uid != eff_uid))
+        Panic(0, "Must run suid root for multiuser support.");
     }
   if (SockMatch && *SockMatch == 0)
     SockMatch = 0;
@@ -875,6 +953,29 @@ char **av;
     }
 #endif
 
+#define SET_GUID() do \
+  { \
+    setgid(real_gid); \
+    setuid(real_uid); \
+    eff_uid = real_uid; \
+    eff_gid = real_gid; \
+  } while (0)
+
+#define SET_TTYNAME(fatal) do \
+  { \
+    if (!(attach_tty = ttyname(0))) \
+      { \
+	if (fatal) \
+	  Panic(0, "Must be connected to a terminal."); \
+	else \
+	  attach_tty = ""; \
+      } \
+    else if (stat(attach_tty, &st)) \
+      Panic(errno, "Cannot access '%s'", attach_tty); \
+    if (strlen(attach_tty) >= MAXPATHLEN) \
+      Panic(0, "TtyName too long - sorry."); \
+  } while (0)
+
   if (home == 0 || *home == '\0')
     home = ppp->pw_dir;
   if (strlen(LoginName) > 20)
@@ -887,22 +988,31 @@ char **av;
     Panic(0, "$HOME too long - sorry.");
 
   attach_tty = "";
-  if (!detached && !lsflag && !cmdflag && !(dflag && !mflag && !rflag && !xflag))
+  if (!detached && !lsflag && !cmdflag && !(dflag && !mflag && !rflag && !xflag) && !(!mflag && !SockMatch && sty && !xflag))
     {
+#ifndef NAMEDPIPE
+      int fl;
+#endif
+
       /* ttyname implies isatty */
-      if (!(attach_tty = ttyname(0)))
-        Panic(0, "Must be connected to a terminal.");
-      if (strlen(attach_tty) >= MAXPATHLEN)
-	Panic(0, "TtyName too long - sorry.");
-      if (stat(attach_tty, &st))
-	Panic(errno, "Cannot access '%s'", attach_tty);
+      SET_TTYNAME(1);
 #ifdef MULTIUSER
       tty_mode = (int)st.st_mode & 0777;
 #endif
-      if ((n = secopen(attach_tty, O_RDWR | O_NONBLOCK, 0)) < 0)
-	Panic(0, "Cannot open your terminal '%s' - please check.", attach_tty);
-      close(n);
-      debug1("attach_tty is %s\n", attach_tty);
+
+#ifndef NAMEDPIPE
+      fl = fcntl(0, F_GETFL, 0);
+      if (fl != -1 && (fl & (O_RDWR|O_RDONLY|O_WRONLY)) == O_RDWR)
+	attach_fd = 0;
+#endif
+      if (attach_fd == -1)
+	{
+	  if ((n = secopen(attach_tty, O_RDWR | O_NONBLOCK, 0)) < 0)
+	    Panic(0, "Cannot open your terminal '%s' - please check.", attach_tty);
+	  close(n);
+	}
+      debug2("attach_tty is %s, attach_fd is %d\n", attach_tty, attach_fd);
+
       if ((attach_term = getenv("TERM")) == 0 || *attach_term == 0)
 	Panic(0, "Please set a terminal type.");
       if (strlen(attach_term) > sizeof(D_termname) - 1)
@@ -971,7 +1081,7 @@ char **av;
       else
 	{
 	  SockDir = SOCKDIR;
-	  if (lstat(SockDir, &st))
+	  if (stat(SockDir, &st))
 	    {
 	      n = (eff_uid == 0 && (real_uid || eff_gid == real_gid)) ? 0755 :
 	          (eff_gid != real_gid) ? 0775 :
@@ -1052,10 +1162,7 @@ char **av;
       if (multi)
 	real_uid = multi_uid;
 #endif
-      setgid(real_gid);
-      setuid(real_uid);
-      eff_uid = real_uid;
-      eff_gid = real_gid;
+      SET_GUID();
       i = FindSocket((int *)NULL, &fo, &oth, SockMatch);
       if (quietflag)
         exit(8 + (fo ? ((oth || i) ? 2 : 1) : 0) + i);
@@ -1067,26 +1174,12 @@ char **av;
   signal(SIG_BYE, AttacherFinit);	/* prevent races */
   if (cmdflag)
     {
-      char *sty = 0;
-
       /* attach_tty is not mandatory */
-      if ((attach_tty = ttyname(0)) == 0)
-        attach_tty = "";
-      if (strlen(attach_tty) >= MAXPATHLEN)
-	Panic(0, "TtyName too long - sorry.");
+      SET_TTYNAME(0);
       if (!*av)
 	Panic(0, "Please specify a command.");
-      setgid(real_gid);
-      setuid(real_uid);
-      eff_uid = real_uid;
-      eff_gid = real_gid;
-      if (!mflag && !SockMatch)
-	{
-	  sty = getenv("STY");
-	  if (sty && *sty == 0)
-	    sty = 0;
-	}
-      SendCmdMessage(sty, SockMatch, av);
+      SET_GUID();
+      SendCmdMessage(sty, SockMatch, av, queryflag >= 0);
       exit(0);
     }
   else if (rflag || xflag)
@@ -1105,26 +1198,21 @@ char **av;
     }
   else if (dflag && !mflag)
     {
-      (void) Attach(MSG_DETACH);
+      SET_TTYNAME(0);
+      Attach(MSG_DETACH);
       Msg(0, "[%s %sdetached.]\n", SockName, (dflag > 1 ? "power " : ""));
       eexit(0);
       /* NOTREACHED */
     }
-  if (!SockMatch && !mflag)
+  if (!SockMatch && !mflag && sty)
     {
-      register char *sty;
-
-      if ((sty = getenv("STY")) != 0 && *sty != '\0')
-	{
-	  setgid(real_gid);
-	  setuid(real_uid);
-	  eff_uid = real_uid;
-	  eff_gid = real_gid;
-	  nwin_options.args = av;
-	  SendCreateMsg(sty, &nwin);
-	  exit(0);
-	  /* NOTREACHED */
-	}
+      /* attach_tty is not mandatory */
+      SET_TTYNAME(0);
+      SET_GUID();
+      nwin_options.args = av;
+      SendCreateMsg(sty, &nwin);
+      exit(0);
+      /* NOTREACHED */
     }
   nwin_compose(&nwin_default, &nwin_options, &nwin_default);
 
@@ -1155,13 +1243,13 @@ char **av;
         socknamebuf[NAME_MAX] = 0;
 #endif
       sprintf(SockPath + strlen(SockPath), "/%s", socknamebuf);
-      setgid(real_gid);
-      setuid(real_uid);
-      eff_uid = real_uid;
-      eff_gid = real_gid;
+      SET_GUID();
       Attacher();
       /* NOTREACHED */
     }
+
+  if (!detached)
+    PanicPid = getppid();
 
   if (DefaultEsc == -1)
     DefaultEsc = Ctrl('a');
@@ -1196,9 +1284,13 @@ char **av;
 #endif
   if (!detached)
     {
-      /* reopen tty. must do this, because fd 0 may be RDONLY */
-      if ((n = secopen(attach_tty, O_RDWR, 0)) < 0)
-	Panic(0, "Cannot reopen '%s' - please check.", attach_tty);
+      if (attach_fd == -1)
+	{
+	  if ((n = secopen(attach_tty, O_RDWR, 0)) < 0)
+	    Panic(0, "Cannot reopen '%s' - please check.", attach_tty);
+	}
+      else
+	n = dup(attach_fd);
     }
   else
     n = -1;
@@ -1222,6 +1314,7 @@ char **av;
     {
       if (MakeDisplay(LoginName, attach_tty, attach_term, n, getppid(), &attach_Mode) == 0)
 	Panic(0, "Could not alloc display");
+      PanicPid = 0;
 #ifdef ENCODINGS
       D_encoding = nwin_options.encoding > 0 ? nwin_options.encoding : 0;
       debug1("D_encoding = %d\n", D_encoding);
@@ -1255,12 +1348,12 @@ char **av;
 #ifdef ETCSCREENRC
 # ifdef ALLOW_SYSSCREENRC
   if ((ap = getenv("SYSSCREENRC")))
-    StartRc(ap);
+    (void)StartRc(ap, 0);
   else
 # endif
-    StartRc(ETCSCREENRC);
+    (void)StartRc(ETCSCREENRC, 0);
 #endif
-  StartRc(RcFileName);
+  (void)StartRc(RcFileName, 0);
 # ifdef UTMPOK
 #  ifndef UTNOKEEP
   InitUtmp(); 
@@ -1326,11 +1419,20 @@ char **av;
       debug("We open one default window, as screenrc did not specify one.\n");
       if (MakeWindow(&nwin) == -1)
 	{
-	  Msg(0, "Sorry, could not find a PTY.");
-	  sleep(5);
+	  fd_set rfd;
+	  struct timeval tv = { MsgWait/1000, 1000*(MsgWait%1000) };
+	  FD_SET(0, &rfd);
+
+	  Msg(0, "Sorry, could not find a PTY or TTY.");
+	  // allow user to exit early by pressing any key.
+	  select(1, &rfd, NULL, NULL, &tv);
 	  Finit(0);
 	  /* NOTREACHED */
 	}
+    }
+  else if (ac) /* Screen was invoked with a command */
+    {
+      MakeWindow(&nwin);
     }
 
 #ifdef HAVE_BRAILLE
@@ -1340,7 +1442,7 @@ char **av;
   if (display && default_startup)
     display_copyright();
   signal(SIGINT, SigInt);
-  if (rflag && (rflag & 1) == 0)
+  if (rflag && (rflag & 1) == 0 && !quietflag)
     {
       Msg(0, "New screen...");
       rflag = 0;
@@ -1365,13 +1467,61 @@ char **av;
 }
 
 void
-WindowDied(p)
+WindowDied(p, wstat, wstat_valid)
 struct win *p;
+#ifdef BSDWAIT
+  union wait wstat;
+#else
+  int wstat;
+#endif
+int wstat_valid;
 {
-  if (ZombieKey_destroy)
+  int killit = 0;
+
+  if (p->w_destroyev.data == (char *)p)
     {
-      char buf[100], *s;
+      wstat = p->w_exitstatus;
+      wstat_valid = 1;
+      evdeq(&p->w_destroyev);
+      p->w_destroyev.data = 0;
+    }
+
+#if defined(BSDJOBS) && !defined(BSDWAIT)
+  if (!wstat_valid && p->w_pid > 0)
+    {
+      /* EOF on file descriptor. The process is probably also dead.
+       * try a waitpid */
+      if (waitpid(p->w_pid, &wstat, WNOHANG | WUNTRACED) == p->w_pid)
+	{
+	  p->w_pid = 0;
+	  wstat_valid = 1;
+	}
+    }
+#endif
+  if (ZombieKey_destroy && ZombieKey_onerror && wstat_valid &&
+      WIFEXITED(wstat) && WEXITSTATUS(wstat) == 0)
+	killit = 1;
+
+  if (ZombieKey_destroy && !killit)
+    {
+      char buf[100], *s, reason[100];
       time_t now;
+
+      if (wstat_valid) {
+	if (WIFEXITED(wstat))
+	  if (WEXITSTATUS(wstat))
+            sprintf(reason, "terminated with exit status %d", WEXITSTATUS(wstat));
+	  else
+            sprintf(reason, "terminated normally");
+	else if (WIFSIGNALED(wstat))
+          sprintf(reason, "terminated with signal %d%s", WTERMSIG(wstat),
+#ifdef WCOREDUMP
+			  WCOREDUMP(wstat) ? " (core file generated)" : "");
+#else
+			  "");
+#endif
+      } else
+	sprintf(reason, "detached from window");
 
       (void) time(&now);
       s = ctime(&now);
@@ -1388,11 +1538,12 @@ struct win *p;
 #endif
       CloseDevice(p);
 
+      p->w_deadpid = p->w_pid;
       p->w_pid = 0;
       ResetWindow(p);
       /* p->w_y = p->w_bot; */
       p->w_y = MFindUsedLine(p, p->w_bot, 1);
-      sprintf(buf, "\n\r=== Window terminated (%s) ===", s ? s : "?");
+      sprintf(buf, "\n\r=== Command %s (%s) ===", reason, s ? s : "?");
       WriteString(p, buf, strlen(buf));
       WindowChanged(p, 'f');
     }
@@ -1483,8 +1634,20 @@ SigInt SIGDEFARG
 static sigret_t
 CoreDump SIGDEFARG
 {
+  /* if running with s-bit, we must reset the s-bit, so that we get a
+   * core file anyway.
+   */
+
   struct display *disp;
   char buf[80];
+
+  char *dump_msg = " (core dumped)";
+
+  int running_w_s_bit = getuid() != geteuid();
+#if defined(SHADOWPW) && !defined(DEBUG) && !defined(DUMPSHADOW)
+  if (running_w_s_bit)
+    dump_msg = "";
+#endif
 
 #if defined(SYSVSIGS) && defined(SIGHASARG)
   signal(sigsig, SIG_IGN);
@@ -1492,30 +1655,34 @@ CoreDump SIGDEFARG
   setgid(getgid());
   setuid(getuid());
   unlink("core");
+
 #ifdef SIGHASARG
-  sprintf(buf, "\r\n[screen caught signal %d.%s]\r\n", sigsig,
+  sprintf(buf, "\r\n[screen caught signal %d.%s]\r\n", sigsig, dump_msg);
 #else
-  sprintf(buf, "\r\n[screen caught a fatal signal.%s]\r\n",
+  sprintf(buf, "\r\n[screen caught a fatal signal.%s]\r\n", dump_msg);
 #endif
-#if defined(SHADOWPW) && !defined(DEBUG) && !defined(DUMPSHADOW)
-              ""
-#else /* SHADOWPW  && !DEBUG */
-              " (core dumped)"
-#endif /* SHADOWPW  && !DEBUG */
-              );
+
   for (disp = displays; disp; disp = disp->d_next)
     {
+      if (disp->d_nonblock < -1 || disp->d_nonblock > 1000000)
+	continue;
       fcntl(disp->d_userfd, F_SETFL, 0);
       SetTTY(disp->d_userfd, &D_OldMode);
       write(disp->d_userfd, buf, strlen(buf));
       Kill(disp->d_userpid, SIG_BYE);
     }
+
+  if (running_w_s_bit)
+    {
 #if defined(SHADOWPW) && !defined(DEBUG) && !defined(DUMPSHADOW)
-  Kill(getpid(), SIGKILL);
-  eexit(11);
+      Kill(getpid(), SIGKILL);
+      eexit(11);
 #else /* SHADOWPW && !DEBUG */
-  abort();
+      abort();
 #endif /* SHADOWPW  && !DEBUG */
+    }
+  else
+    abort();
   SIGRETURN;
 }
 
@@ -1555,12 +1722,16 @@ DoWait()
       for (p = windows; p; p = next)
 	{
 	  next = p->w_next;
-	  if (pid == p->w_pid)
+	  if (  (p->w_pid     && pid == p->w_pid) ||
+		(p->w_deadpid && pid == p->w_deadpid) )
 	    {
+	      /* child has ceased to exist */
+	      p->w_pid = 0;
+		
 #ifdef BSDJOBS
 	      if (WIFSTOPPED(wstat))
 		{
-		  debug3("Window %d pid %d: WIFSTOPPED (sig %d)\n", p->w_number, p->w_pid, WSTOPSIG(wstat));
+		  debug3("Window %d pid %d: WIFSTOPPED (sig %d)\n", p->w_number, pid, WSTOPSIG(wstat));
 #ifdef SIGTTIN
 		  if (WSTOPSIG(wstat) == SIGTTIN)
 		    {
@@ -1577,13 +1748,22 @@ DoWait()
 #endif
 		  /* Try to restart process */
 		  Msg(0, "Child has been stopped, restarting.");
-		  if (killpg(p->w_pid, SIGCONT))
-		    kill(p->w_pid, SIGCONT);
+		  if (killpg(pid, SIGCONT))
+		    kill(pid, SIGCONT);
 		}
 	      else
 #endif
 		{
-		  WindowDied(p);
+		  /* Screen will detect the window has died when the window's
+		   * file descriptor signals EOF (which it will do when the process in
+		   * the window terminates). So do this in a timeout of 10 seconds.
+		   * (not doing this at all might also work)
+		   * See #27061 for more details.
+		   */
+		  p->w_destroyev.data = (char *)p;
+		  p->w_exitstatus = wstat;
+		  SetTimeout(&p->w_destroyev, 10 * 1000);
+		  evenq(&p->w_destroyev);
 		}
 	      break;
 	    }
@@ -1620,14 +1800,13 @@ void
 Finit(i)
 int i;
 {
-  struct win *p, *next;
-
   signal(SIGCHLD, SIG_DFL);
   signal(SIGHUP, SIG_IGN);
   debug1("Finit(%d);\n", i);
-  for (p = windows; p; p = next)
+  while (windows)
     {
-      next = p->w_next;
+      struct win *p = windows;
+      windows = windows->w_next;
       FreeWindow(p);
     }
   if (ServerSocket != -1)
@@ -1652,7 +1831,7 @@ int i;
       RestoreLoginSlot();
 #endif
       AddStr("[screen is terminating]\r\n");
-      Flush();
+      Flush(3);
       SetTTY(D_userfd, &D_OldMode);
       fcntl(D_userfd, F_SETFL, 0);
       freetty();
@@ -1721,6 +1900,17 @@ int mode;
   if (display == 0)
     return;
 
+#define AddStrSock(msg) do { \
+    if (SockName) \
+      { \
+	AddStr("[" msg " from "); \
+	AddStr(SockName); \
+	AddStr("]\r\n"); \
+      } \
+    else \
+      AddStr("[" msg "]\r\n"); \
+  } while (0)
+
   signal(SIGHUP, SIG_IGN);
   debug1("Detach(%d)\n", mode);
   if (D_status)
@@ -1734,7 +1924,7 @@ int mode;
       sign = SIG_BYE;
       break;
     case D_DETACH:
-      AddStr("[detached]\r\n");
+      AddStrSock("detached");
       sign = SIG_BYE;
       break;
 #ifdef BSDJOBS
@@ -1744,14 +1934,14 @@ int mode;
 #endif
 #ifdef REMOTE_DETACH
     case D_REMOTE:
-      AddStr("[remote detached]\r\n");
+      AddStrSock("remote detached");
       sign = SIG_BYE;
       break;
 #endif
 #ifdef POW_DETACH
     case D_POWER:
-      AddStr("[power detached]\r\n");
-      if (PowDetachString) 
+      AddStrSock("power detached");
+      if (PowDetachString)
 	{
 	  AddStr(PowDetachString);
 	  AddStr("\r\n");
@@ -1760,8 +1950,8 @@ int mode;
       break;
 #ifdef REMOTE_DETACH
     case D_REMOTE_POWER:
-      AddStr("[remote power detached]\r\n");
-      if (PowDetachString) 
+      AddStrSock("remote power detached");
+      if (PowDetachString)
 	{
 	  AddStr(PowDetachString);
 	  AddStr("\r\n");
@@ -1812,6 +2002,8 @@ int mode;
       D_user->u_detachwin = D_fore->w_number;
       D_user->u_detachotherwin = D_other ? D_other->w_number : -1;
     }
+  AutosaveLayout(D_layout);
+  layout_last = D_layout;
   for (cv = D_cvlist; cv; cv = cv->c_next)
     {
       p = Layer2Window(cv->c_layer);
@@ -1835,6 +2027,7 @@ int mode;
   debug2("Detach: Signal %d to Attacher(%d)!\n", sign, pid);
   debug("Detach returns, we are successfully detached.\n");
   signal(SIGHUP, SigHup);
+#undef AddStrSock
 }
 
 static int
@@ -1859,7 +2052,7 @@ MakeNewEnv()
     free((char *)NewEnv);
   NewEnv = np = (char **) malloc((unsigned) (op - environ + 7 + 1) * sizeof(char **));
   if (!NewEnv)
-    Panic(0, strnomem);
+    Panic(0, "%s", strnomem);
   sprintf(stybuf, "STY=%s", strlen(SockName) <= MAXSTR - 5 ? SockName : "?");
   *np++ = stybuf;	                /* NewEnv[0] */
   *np++ = Term;	                /* NewEnv[1] */
@@ -1882,33 +2075,37 @@ MakeNewEnv()
   *np = 0;
 }
 
-void
-/*VARARGS2*/
 #if defined(USEVARARGS) && defined(__STDC__)
-Msg(int err, char *fmt, VA_DOTS)
+  #define DEFINE_VARARGS_FN(fnname)	void fnname (int err, const char *fmt, VA_DOTS)
 #else
-Msg(err, fmt, VA_DOTS)
-int err;
-char *fmt;
-VA_DECL
+  #define DEFINE_VARARGS_FN(fnname)	void fnname(err, fmt, VA_DOTS) \
+  int err;	\
+  const char *fmt;	\
+  VA_DECL
 #endif
-{
-  VA_LIST(ap)
-  char buf[MAXPATHLEN*2];
-  char *p = buf;
 
-  VA_START(ap, fmt);
-  fmt = DoNLS(fmt);
-  (void)vsnprintf(p, sizeof(buf) - 100, fmt, VA_ARGS(ap));
-  VA_END(ap);
-  if (err)
-    {
-      p += strlen(p);
-      *p++ = ':';
-      *p++ = ' ';
-      strncpy(p, strerror(err), buf + sizeof(buf) - p - 1);
-      buf[sizeof(buf) - 1] = 0;
-    }
+#define	PROCESS_MESSAGE(B) do { \
+    char *p = B;	\
+    VA_LIST(ap)	\
+    VA_START(ap, fmt);	\
+    fmt = DoNLS(fmt);	\
+    (void)vsnprintf(p, sizeof(B) - 100, fmt, VA_ARGS(ap));	\
+    VA_END(ap);	\
+    if (err)	\
+      {	\
+	p += strlen(p);	\
+	*p++ = ':';	\
+	*p++ = ' ';	\
+	strncpy(p, strerror(err), B + sizeof(B) - p - 1);	\
+	B[sizeof(B) - 1] = 0;	\
+      }	\
+  } while (0)
+
+DEFINE_VARARGS_FN(Msg)
+{
+  char buf[MAXPATHLEN*2];
+  PROCESS_MESSAGE(buf);
+
   debug2("Msg('%s') (%#x);\n", buf, (unsigned int)display);
 
   if (display && displays)
@@ -1931,41 +2128,26 @@ VA_DECL
     }
   else
     printf("%s\r\n", buf);
+
+  if (queryflag >= 0)
+    write(queryflag, buf, strlen(buf));
 }
 
 /*
  * Call FinitTerm for all displays, write a message to each and call eexit();
  */
-void
-/*VARARGS2*/
-#if defined(USEVARARGS) && defined(__STDC__)
-Panic(int err, char *fmt, VA_DOTS)
-#else
-Panic(err, fmt, VA_DOTS)
-int err;
-char *fmt;
-VA_DECL
-#endif
+DEFINE_VARARGS_FN(Panic)
 {
-  VA_LIST(ap)
   char buf[MAXPATHLEN*2];
-  char *p = buf;
+  PROCESS_MESSAGE(buf);
 
-  VA_START(ap, fmt);
-  fmt = DoNLS(fmt);
-  (void)vsnprintf(p, sizeof(buf) - 100, fmt, VA_ARGS(ap));
-  VA_END(ap);
-  if (err)
-    {
-      p += strlen(p);
-      *p++ = ':';
-      *p++ = ' ';
-      strncpy(p, strerror(err), buf + sizeof(buf) - p - 1);
-      buf[sizeof(buf) - 1] = 0;
-    }
   debug3("Panic('%s'); display=%x displays=%x\n", buf, display, displays);
   if (displays == 0 && display == 0)
-    printf("%s\r\n", buf);
+    {
+      printf("%s\r\n", buf);
+      if (PanicPid)
+        Kill(PanicPid, SIG_BYE);
+    }
   else if (displays == 0)
     {
       /* no displays but a display - must have forked.
@@ -1983,7 +2165,7 @@ VA_DECL
         if (D_status)
 	  RemoveStatus();
         FinitTerm();
-        Flush();
+        Flush(3);
 #ifdef UTMPOK
         RestoreLoginSlot();
 #endif
@@ -2011,6 +2193,22 @@ VA_DECL
   eexit(1);
 }
 
+DEFINE_VARARGS_FN(QueryMsg)
+{
+  char buf[MAXPATHLEN*2];
+
+  if (queryflag < 0)
+    return;
+
+  PROCESS_MESSAGE(buf);
+  write(queryflag, buf, strlen(buf));
+}
+
+DEFINE_VARARGS_FN(Dummy)
+{}
+
+#undef PROCESS_MESSAGE
+#undef DEFINE_VARARGS_FN
 
 /*
  * '^' is allowed as an escape mechanism for control characters. jw.
@@ -2026,7 +2224,7 @@ static const char months[] = "JanFebMarAprMayJunJulAugSepOctNovDec";
 #endif
 
 static char winmsg_buf[MAXSTR];
-#define MAX_WINMSG_REND 16	/* rendition changes */
+#define MAX_WINMSG_REND 256	/* rendition changes */
 static int winmsg_rend[MAX_WINMSG_REND];
 static int winmsg_rendpos[MAX_WINMSG_REND];
 static int winmsg_numrend;
@@ -2048,7 +2246,7 @@ int padlen;
   r = winmsg_numrend;
   while (p >= buf)
     {
-      if (r && p - buf == winmsg_rendpos[r - 1])
+      if (r && *p != 127 && p - buf == winmsg_rendpos[r - 1])
 	{
 	  winmsg_rendpos[--r] = pn - buf;
 	  continue;
@@ -2062,6 +2260,8 @@ int padlen;
 	  while (i-- > 0)
 	    *pn-- = ' ';
 	  numpad--;
+	  if (r && p - buf == winmsg_rendpos[r - 1])
+	    winmsg_rendpos[--r] = pn - buf;
 	}
     }
   return pn2;
@@ -2187,7 +2387,7 @@ char **cmdv;
       bt = (struct backtick *)malloc(sizeof *bt);
       if (!bt)
 	{
-	  Msg(0, strnomem);
+	  Msg(0, "%s", strnomem);
           return;
 	}
       bzero(bt, sizeof(*bt));
@@ -2209,7 +2409,7 @@ char **cmdv;
       bt->buf = (char *)malloc(MAXSTR);
       if (bt->buf == 0)
 	{
-	  Msg(0, strnomem);
+	  Msg(0, "%s", strnomem);
 	  setbacktick(num, 0, 0, (char **)0);
           return;
 	}
@@ -2273,6 +2473,22 @@ time_t now;
   return bt->result;
 }
 
+int
+AddWinMsgRend(str, r)
+const char *str;
+int r;
+{
+  if (winmsg_numrend >= MAX_WINMSG_REND || str < winmsg_buf ||
+      str >= winmsg_buf + MAXSTR)
+    return -1;
+
+  winmsg_rend[winmsg_numrend] = r;
+  winmsg_rendpos[winmsg_numrend] = str - winmsg_buf;
+  winmsg_numrend++;
+
+  return 0;
+}
+
 char *
 MakeWinMsgEv(str, win, esc, padlen, ev, rec)
 char *str;
@@ -2301,7 +2517,7 @@ int rec;
   int truncpos = -1;
   int truncper = 0;
   int trunclong = 0;
-  struct backtick *bt;
+  struct backtick *bt = NULL;
  
   if (winmsg_numrend >= 0)
     winmsg_numrend = 0;
@@ -2528,9 +2744,7 @@ int rec;
 		oldfore = D_fore;
 		D_fore = win;
 	      }
-	    ss = AddWindows(p, l - 1, (*s == 'w' ? 0 : 1) | (longflg ? 0 : 2) | (plusflg ? 4 : 0), win ? win->w_number : -1);
-	    if (minusflg)
-	       *ss = 0;
+	    ss = AddWindows(p, l - 1, (*s == 'w' ? 0 : 1) | (longflg ? 0 : 2) | (plusflg ? 4 : 0) | (minusflg ? 8 : 0), win ? win->w_number : -1);
 	    if (display)
 	      D_fore = oldfore;
 	  }
@@ -2601,10 +2815,49 @@ int rec;
 	    }
 	  p += strlen(p) - 1;
 	  break;
+	case 'S':
+	  {
+	    char *session_name;
+	    *p = 0;
+	    session_name = strchr(SockName, '.') + 1;
+	    if ((int)strlen(session_name) < l)
+	      {
+		strcpy(p, session_name);
+		if (*p)
+		  qmflag = 1;
+	      }
+	    p += strlen(p) - 1;
+	  }
+	  break;
+        case 'p':
+          {
+            sprintf(p, "%d", (plusflg && display) ? D_userpid : getpid());
+            p += strlen(p) - 1;
+          }
+          break;
 	case 'F':
 	  p--;
 	  /* small hack */
 	  if (display && ((ev && ev == &D_forecv->c_captev) || (!ev && win && win == D_fore)))
+	    minusflg = !minusflg;
+	  if (minusflg)
+	    qmflag = 1;
+	  break;
+	case 'P':
+	  p--;
+#ifdef COPY_PASTE
+	  if (display && ev && ev != &D_hstatusev)	/* Hack */
+	    {
+	      /* Is the layer in the current canvas in copy mode? */
+	      struct canvas *cv = (struct canvas *)ev->data;
+	      if (ev == &cv->c_captev && cv->c_layer->l_layfn == &MarkLf)
+		qmflag = 1;
+	    }
+#endif
+	  break;
+	case 'E':
+	  p--;
+	  if (display && D_ESCseen)
 	    qmflag = 1;
 	  break;
 	case '>':
@@ -2785,7 +3038,7 @@ int esc;
   return MakeWinMsgEv(s, win, esc, 0, (struct event *)0, 0);
 }
 
-int
+void
 PutWinMsg(s, start, max)
 char *s;
 int start, max;
@@ -2796,7 +3049,18 @@ int start, max;
   int rendstackn = 0;
 
   if (s != winmsg_buf)
-    return 0;
+    {
+      /* sorry, no fancy coloring available */
+      debug1("PutWinMsg %s plain\n", s);
+      l = strlen(s);
+      if (l > max)
+	l = max;
+      l -= start;
+      s += start;
+      while (l-- > 0)
+	PUTCHARLP(*s++);
+      return;
+    }
   rend = D_rend;
   p = 0;
   l = strlen(s);
@@ -2846,7 +3110,6 @@ int start, max;
 	    PUTCHARLP(*s++);
 	}
     }
-  return 1;
 }
 
 
@@ -2959,7 +3222,7 @@ char *data;
 	  /* don't annoy the user with two messages */
 	  if (p->w_monitor == MON_FOUND)
 	    p->w_monitor = MON_DONE;
-          WindowChanged(p, 'f');
+	  WindowChanged(p, 'f');
 	}
       if (p->w_monitor == MON_FOUND)
 	{
@@ -2979,7 +3242,16 @@ char *data;
 	      Msg(0, "%s", MakeWinMsg(ActivityString, p, '%'));
 	      p->w_monitor = MON_DONE;
 	    }
-          WindowChanged(p, 'f');
+	  WindowChanged(p, 'f');
+	}
+      if (p->w_silence == SILENCE_FOUND)
+	{
+	  /* Unset the flag if the user switched to this window. */
+	  if (p->w_layer.l_cvlist)
+	    {
+	      p->w_silence = SILENCE_ON;
+	      WindowChanged(p, 'f');
+	    }
 	}
     }
 

@@ -1,11 +1,16 @@
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,9 +19,9 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
  */
@@ -146,60 +151,22 @@ int wi, he;
 int change_fore;
 {
   struct win *p;
-  struct canvas *cv, **cvpp;
+  struct canvas *cv;
   int wwi;
-  int y, h, hn;
 
   debug2("ChangeScreenSize from (%d,%d) ", D_width, D_height);
   debug3("to (%d,%d) (change_fore: %d)\n",wi, he, change_fore);
 
-  /*
-   *  STRATEGY: keep the ratios.
-   *  if canvas doesn't fit anymore, throw it off.
-   *  (ATTENTION: cvlist must be sorted!)
-   */
-  y = 0;
-  h = he;
-  if (D_has_hstatus == HSTATUS_LASTLINE)
+  cv = &D_canvas;
+  cv->c_xe = wi - 1;
+  cv->c_ye = he - 1 - ((cv->c_slperp && cv->c_slperp->c_slnext) || captionalways) - (D_has_hstatus == HSTATUS_LASTLINE);
+  cv->c_blank.l_height = cv->c_ye - cv->c_ys + 1;
+  if (cv->c_slperp)
     {
-      if (h > 1)
-        h--;
-      else
-        D_has_hstatus = 0;	/* sorry */
+      ResizeCanvas(cv);
+      RecreateCanvasChain();
+      RethinkDisplayViewports();
     }
-  for (cvpp = &D_cvlist; (cv = *cvpp); )
-    {
-      if (h < 2 && cvpp != &D_cvlist)
-        {
-          /* kill canvas */
-	  SetCanvasWindow(cv, 0);
-          *cvpp = cv->c_next;
-	  free(cv);
-	  if (D_forecv == cv)
-	    D_forecv = 0;
-          continue;
-        }
-      hn = (cv->c_ye - cv->c_ys + 1) * he / D_height;
-      if (hn == 0)
-        hn = 1;
-      if (hn + 2 >= h || cv->c_next == 0)
-        hn = h - 1;
-      if ((!captionalways && cv == D_cvlist && h - hn < 2) || hn == 0)
-        hn = h;
-      ASSERT(hn > 0);
-      cv->c_xs = 0;
-      cv->c_xe = wi - 1;
-      cv->c_ys = y;
-      cv->c_ye = y + hn - 1;
-
-      cv->c_xoff = cv->c_xs;
-      cv->c_yoff = cv->c_ys;
-
-      y += hn + 1;
-      h -= hn + 1;
-      cvpp = &cv->c_next;
-    }
-  RethinkDisplayViewports();
   if (D_forecv == 0)
     D_forecv = D_cvlist;
   if (D_forecv)
@@ -226,7 +193,7 @@ int change_fore;
   debug2("Default size: (%d,%d)\n", D_defwidth, D_defheight);
   if (change_fore)
     ResizeLayersToCanvases();
-  if (D_CWS == NULL && displays->d_next == 0)
+  if (change_fore == 2 && D_CWS == NULL && displays->d_next == 0)
     {
       /* adapt all windows  -  to be removed ? */
       for (p = windows; p; p = p->w_next)
@@ -356,6 +323,34 @@ kaablamm()
   Msg(0, "Aborted because of window size change.");
 }
 
+/* Kills non-resizable layers. */
+#define RESIZE_OR_KILL_LAYERS(l, wi, he) do \
+  {	\
+    struct layer *_last = NULL;	\
+    flayer = (l);	\
+    while (flayer->l_next)	\
+      {	\
+	if (LayResize(wi, he) == 0)	\
+	  {	\
+	    _last = flayer;	\
+	    flayer = flayer->l_next;	\
+	  }	\
+	else	\
+	  {	\
+	    struct canvas *_cv;	\
+	    for (_cv = flayer->l_cvlist; _cv; _cv = _cv->c_lnext)	\
+	      _cv->c_display->d_kaablamm = 1;	\
+	    ExitOverlayPage();	\
+	    if (_last)	\
+	      _last->l_next = flayer;	\
+	  }	\
+      }	\
+    /* We assume that the bottom-most layer, i.e. when flayer->l_next == 0,	\
+     * is always resizable. Currently, WinLf and BlankLf can be the bottom-most layers.	\
+     */	\
+    LayResize(wi, he);	\
+  } while (0)
+
 void
 ResizeLayer(l, wi, he, norefdisp)
 struct layer *l;
@@ -371,52 +366,39 @@ struct display *norefdisp;
     return;
   p = Layer2Window(l);
 
+  /* If 'flayer' and 'l' are for the same window, then we will not
+   * restore 'flayer'. */
   if (oldflayer && (l == oldflayer || Layer2Window(oldflayer) == p))
-    while (oldflayer->l_next)
-      oldflayer = oldflayer->l_next;
-    
+    oldflayer = NULL;
+
+  flayer = l;
+
   if (p)
     {
+      /* It's a window layer. Kill the overlays on it in all displays. */
       for (d = displays; d; d = d->d_next)
 	for (cv = d->d_cvlist; cv; cv = cv->c_next)
 	  {
 	    if (p == Layer2Window(cv->c_layer))
 	      {
-		flayer = cv->c_layer;
-		if (flayer->l_next)
-		  d->d_kaablamm = 1;
-	        while (flayer->l_next)
-		  ExitOverlayPage();
+		/* Canvas 'cv' on display 'd' shows this window. Remove any non-resizable
+		 * layers over it. */
+		RESIZE_OR_KILL_LAYERS(cv->c_layer, wi, he);
 	      }
 	  }
-      l = p->w_savelayer;
-    }
-  flayer = l;
-  if (p == 0 && flayer->l_next && flayer->l_next->l_next == 0 && LayResize(wi, he) == 0)
-    {
-      flayer = flayer->l_next;
-      LayResize(wi, he);
-      flayer = l;
     }
   else
     {
-      if (flayer->l_next)
-        for (cv = flayer->l_cvlist; cv; cv = cv->c_lnext)
-	  cv->c_display->d_kaablamm = 1;
-      while (flayer->l_next)
-	ExitOverlayPage();
+      /* It's a Blank layer. Just kill the non-resizable overlays over it. */
+      RESIZE_OR_KILL_LAYERS(flayer, wi, he);
     }
-  if (p)
-    flayer = &p->w_layer;
-  LayResize(wi, he);
-  /* now everybody is on flayer, redisplay */
-  l = flayer;
+
   for (display = displays; display; display = display->d_next)
     {
       if (display == norefdisp)
 	continue;
       for (cv = D_cvlist; cv; cv = cv->c_next)
-	if (cv->c_layer == l)
+	if (Layer2Window(cv->c_layer) == p)
 	  {
             CV_CALL(cv, LayRedisplayLine(-1, -1, -1, 0));
             RefreshArea(cv->c_xs, cv->c_ys, cv->c_xe, cv->c_ye, 0);
@@ -427,10 +409,13 @@ struct display *norefdisp;
 	  D_kaablamm = 0;
 	}
     }
-  flayer = oldflayer;
+
+  /* If we started resizing a non-flayer layer, then restore the flayer.
+   * Otherwise, flayer should already be updated to the topmost foreground layer. */
+  if (oldflayer)
+    flayer = oldflayer;
   display = olddisplay;
 }
-
 
 static void
 FreeMline(ml)
@@ -487,18 +472,16 @@ int xf, xt, l, w;
   bcopy((char *)mlf->image + xf, (char *)mlt->image + xt, l);
   if (mlf->attr != null && mlt->attr == null)
     {
-      if ((mlt->attr = (unsigned char *)malloc(w)) == 0)
+      if ((mlt->attr = (unsigned char *)calloc(w, 1)) == 0)
 	mlt->attr = null, r = -1;
-      bzero((char *)mlt->attr, w);
     }
   if (mlt->attr != null)
     bcopy((char *)mlf->attr + xf, (char *)mlt->attr + xt, l);
 #ifdef FONT
   if (mlf->font != null && mlt->font == null)
     {
-      if ((mlt->font = (unsigned char *)malloc(w)) == 0)
+      if ((mlt->font = (unsigned char *)calloc(w, 1)) == 0)
 	mlt->font = null, r = -1;
-      bzero((char *)mlt->font, w);
     }
   if (mlt->font != null)
     bcopy((char *)mlf->font + xf, (char *)mlt->font + xt, l);
@@ -506,18 +489,16 @@ int xf, xt, l, w;
 #ifdef COLOR
   if (mlf->color != null && mlt->color == null)
     {
-      if ((mlt->color = (unsigned char *)malloc(w)) == 0)
+      if ((mlt->color = (unsigned char *)calloc(w, 1)) == 0)
 	mlt->color = null, r = -1;
-      bzero((char *)mlt->color, w);
     }
   if (mlt->color != null)
     bcopy((char *)mlf->color + xf, (char *)mlt->color + xt, l);
 # ifdef COLORS256
   if (mlf->colorx != null && mlt->colorx == null)
     {
-      if ((mlt->colorx = (unsigned char *)malloc(w)) == 0)
+      if ((mlt->colorx = (unsigned char *)calloc(w, 1)) == 0)
 	mlt->colorx = null, r = -1;
-      bzero((char *)mlt->colorx, w);
     }
   if (mlt->colorx != null)
     bcopy((char *)mlf->colorx + xf, (char *)mlt->colorx + xt, l);
@@ -534,6 +515,7 @@ CheckMaxSize(wi)
 int wi;
 {
   unsigned char *oldnull = null;
+  unsigned char *oldblank = blank;
   struct win *p;
   int i;
   struct mline *ml;
@@ -553,11 +535,11 @@ int wi;
 #ifdef COLOR
   mline_old.color = (unsigned char *)xrealloc((char *)mline_old.color, maxwidth);
 # ifdef COLORS256
-  mline_old.colorx = (unsigned char *)xrealloc((char *)mline_old.color, maxwidth);
+  mline_old.colorx = (unsigned char *)xrealloc((char *)mline_old.colorx, maxwidth);
 # endif
 #endif
   if (!(blank && null && mline_old.image && mline_old.attr IFFONT(&& mline_old.font) IFCOLOR(&& mline_old.color) IFCOLORX(&& mline_old.colorx)))
-    Panic(0, strnomem);
+    Panic(0, "%s", strnomem);
 
   MakeBlankLine(blank, maxwidth);
   bzero((char *)null, maxwidth);
@@ -579,49 +561,34 @@ int wi;
 # endif
 #endif
 
+#define RESET_AFC(x, bl) do { if (x == old##bl) x = bl; } while (0)
+
+#define RESET_LINES(lines, count) \
+  do { \
+    ml = lines; \
+    for (i = 0; i < count; i++, ml++) \
+      { \
+	RESET_AFC(ml->image, blank); \
+	RESET_AFC(ml->attr, null); \
+	IFFONT(RESET_AFC(ml->font, null)); \
+	IFCOLOR(RESET_AFC(ml->color, null)); \
+	IFCOLORX(RESET_AFC(ml->colorx, null)); \
+      } \
+  } while (0)
+
   /* We have to run through all windows to substitute
-   * the null references.
+   * the null and blank references.
    */
   for (p = windows; p; p = p->w_next)
     {
-      ml = p->w_mlines;
-      for (i = 0; i < p->w_height; i++, ml++)
-	{
-	  if (ml->attr == oldnull)
-	    ml->attr = null;
-#ifdef FONT
-	  if (ml->font == oldnull)
-	    ml->font = null;
-#endif
-#ifdef COLOR
-	  if (ml->color == oldnull)
-	    ml->color= null;
-#ifdef COLORS256
-	  if (ml->colorx == oldnull)
-	    ml->colorx = null;
-#endif
-#endif
-	}
+      RESET_LINES(p->w_mlines, p->w_height);
+
 #ifdef COPY_PASTE
-      ml = p->w_hlines;
-      for (i = 0; i < p->w_histheight; i++, ml++)
-	{
-	  if (ml->attr == oldnull)
-	    ml->attr = null;
-# ifdef FONT
-	  if (ml->font == oldnull)
-	    ml->font = null;
-# endif
-# ifdef COLOR
-	  if (ml->color == oldnull)
-	    ml->color= null;
-#  ifdef COLORS256
-	  if (ml->colorx == oldnull)
-	    ml->colorx = null;
-#  endif
-# endif
-	}
+      RESET_LINES(p->w_hlines, p->w_histheight);
+      RESET_LINES(p->w_alt.hlines, p->w_alt.histheight);
 #endif
+
+      RESET_LINES(p->w_alt.mlines, p->w_alt.height);
     }
 }
 
@@ -679,8 +646,23 @@ int wi, he, hi;
   int ncx, ncy, naka, t;
   int y, shift;
 
-  if (wi == 0)
-    he = hi = 0;
+  if (wi <= 0 || he <= 0)
+    wi = he = hi = 0;
+
+  if (p->w_type == W_TYPE_GROUP)
+    return 0;
+
+  if (wi > 1000)
+    {
+      Msg(0, "Window width too large. Truncated to 1000.");
+      wi = 1000;
+    }
+
+  if (he > 1000)
+    {
+      Msg(0, "Window height too large. Truncated to 1000.");
+      he = 1000;
+    }
 
   if (p->w_width == wi && p->w_height == he && p->w_histheight == hi)
     {
@@ -719,7 +701,7 @@ int wi, he, hi;
 	  if ((nmlines = (struct mline *)calloc(he, sizeof(struct mline))) == 0)
 	    {
 	      KillWindow(p);
-	      Msg(0, strnomem);
+	      Msg(0, "%s", strnomem);
 	      return -1;
 	    }
 	}
@@ -765,6 +747,8 @@ int wi, he, hi;
       for (yy = p->w_y + p->w_histheight - 1; yy >= 0 && ncy + shift < he; yy--)
 	{
 	  ml = OLDWIN(yy);
+	  if (!ml->image)
+	    break;
 	  if (ml->image[p->w_width] == ' ')
 	    break;
 	  shift++;
@@ -952,7 +936,7 @@ int wi, he, hi;
 #endif
 		}
 	      KillWindow(p);
-	      Msg(0, strnomem);
+	      Msg(0, "%s", strnomem);
 	      return -1;
 	    }
 	  for (; t < wi; t++)
@@ -967,8 +951,8 @@ int wi, he, hi;
 	}
     }
 
-  /* Change w_Saved_y - this is only an estimate... */
-  p->w_Saved_y += ncy - p->w_y;
+  /* Change w_saved.y - this is only an estimate... */
+  p->w_saved.y += ncy - p->w_y;
 
   p->w_x = ncx;
   p->w_y = ncy;
@@ -980,12 +964,16 @@ int wi, he, hi;
     p->w_x = wi;
   if (p->w_y >= he)
     p->w_y = he - 1;
-  if (p->w_Saved_x > wi)
-    p->w_Saved_x = wi;
-  if (p->w_Saved_y < 0)
-    p->w_Saved_y = 0;
-  if (p->w_Saved_y >= he)
-    p->w_Saved_y = he - 1;
+  if (p->w_saved.x > wi)
+    p->w_saved.x = wi;
+  if (p->w_saved.y < 0)
+    p->w_saved.y = 0;
+  if (p->w_saved.y >= he)
+    p->w_saved.y = he - 1;
+  if (p->w_alt.cursor.x > wi)
+    p->w_alt.cursor.x = wi;
+  if (p->w_alt.cursor.y >= he)
+    p->w_alt.cursor.y = he - 1;
 
   /* reset scrolling region */
   p->w_top = 0;
@@ -993,7 +981,8 @@ int wi, he, hi;
 
   /* signal new size to window */
 #ifdef TIOCSWINSZ
-  if (wi && (p->w_width != wi || p->w_height != he) && p->w_ptyfd >= 0 && p->w_pid)
+  if (wi && (p->w_width != wi || p->w_height != he)
+      && p->w_width != 0 && p->w_height != 0 && p->w_ptyfd >= 0 && p->w_pid)
     {
       glwz.ws_col = wi;
       glwz.ws_row = he;
@@ -1043,22 +1032,26 @@ struct win *p;
 {
   int i;
 
-  if (p->w_alt_mlines)
-    for (i = 0; i < p->w_alt_height; i++)
-      FreeMline(p->w_alt_mlines + i);
-  p->w_alt_mlines = 0;
-  p->w_alt_width = 0;
-  p->w_alt_height = 0;
-  p->w_alt_x = 0;
-  p->w_alt_y = 0;
+  if (p->w_alt.mlines)
+    {
+      for (i = 0; i < p->w_alt.height; i++)
+        FreeMline(p->w_alt.mlines + i);
+      free(p->w_alt.mlines);
+    }
+  p->w_alt.mlines = 0;
+  p->w_alt.width = 0;
+  p->w_alt.height = 0;
 #ifdef COPY_PASTE
-  if (p->w_alt_hlines)
-    for (i = 0; i < p->w_alt_histheight; i++)
-      FreeMline(p->w_alt_hlines + i);
-  p->w_alt_hlines = 0;
-  p->w_alt_histidx = 0;
+  if (p->w_alt.hlines)
+    {
+      for (i = 0; i < p->w_alt.histheight; i++)
+        FreeMline(p->w_alt.hlines + i);
+      free(p->w_alt.hlines);
+    }
+  p->w_alt.hlines = 0;
+  p->w_alt.histidx = 0;
+  p->w_alt.histheight = 0;
 #endif
-  p->w_alt_histheight = 0;
 }
 
 static void
@@ -1068,37 +1061,50 @@ struct win *p;
   struct mline *ml;
   int t;
 
-  ml = p->w_alt_mlines; p->w_alt_mlines = p->w_mlines; p->w_mlines = ml;
-  t = p->w_alt_width; p->w_alt_width = p->w_width; p->w_width = t;
-  t = p->w_alt_height; p->w_alt_height = p->w_height; p->w_height = t;
-  t = p->w_alt_histheight; p->w_alt_histheight = p->w_histheight; p->w_histheight = t;
-  t = p->w_alt_x; p->w_alt_x = p->w_x; p->w_x = t;
-  t = p->w_alt_y; p->w_alt_y = p->w_y; p->w_y = t;
+#define SWAP(item, t) do { (t) = p->w_alt. item; p->w_alt. item = p->w_##item; p->w_##item = (t); } while (0)
+
+  SWAP(mlines, ml);
+  SWAP(width, t);
+  SWAP(height, t);
+
 #ifdef COPY_PASTE
-  ml = p->w_alt_hlines; p->w_alt_hlines = p->w_hlines; p->w_hlines = ml;
-  t = p->w_alt_histidx; p->w_alt_histidx = p->w_histidx; p->w_histidx = t;
+  SWAP(histheight, t);
+  SWAP(hlines, ml);
+  SWAP(histidx, t);
 #endif
+#undef SWAP
 }
 
 void
 EnterAltScreen(p)
 struct win *p;
 {
-  int ox = p->w_x, oy = p->w_y;
-  FreeAltScreen(p);
-  SwapAltScreen(p);
-  ChangeWindowSize(p, p->w_alt_width, p->w_alt_height, p->w_alt_histheight);
-  p->w_x = ox;
-  p->w_y = oy;
+  if (!p->w_alt.on)
+    {
+      /* If not already using the alternate screen buffer, then create
+	 a new one and swap it with the 'real' screen buffer. */
+      FreeAltScreen(p);
+      SwapAltScreen(p);
+    }
+  else
+    {
+      /* Already using the alternate buffer. Just clear the screen. To do so, it
+	 is only necessary to reset the height(s) without resetting the width. */
+      p->w_height = 0;
+      p->w_histheight = 0;
+    }
+  ChangeWindowSize(p, p->w_alt.width, p->w_alt.height, p->w_alt.histheight);
+  p->w_alt.on = 1;
 }
 
 void
 LeaveAltScreen(p)
 struct win *p;
 {
-  if (!p->w_alt_mlines)
+  if (!p->w_alt.on)
     return;
   SwapAltScreen(p);
-  ChangeWindowSize(p, p->w_alt_width, p->w_alt_height, p->w_alt_histheight);
+  ChangeWindowSize(p, p->w_alt.width, p->w_alt.height, p->w_alt.histheight);
   FreeAltScreen(p);
+  p->w_alt.on = 0;
 }

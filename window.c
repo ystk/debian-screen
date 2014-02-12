@@ -1,11 +1,19 @@
-/* Copyright (c) 1993-2002
+/* Copyright (c) 2010
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 2008, 2009
+ *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
+ *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
+ *      Micah Cowan (micah@cowan.name)
+ *      Sadrul Habib Chowdhury (sadrul@users.sourceforge.net)
+ * Copyright (c) 1993-2002, 2003, 2005, 2006, 2007
  *      Juergen Weigert (jnweiger@immd4.informatik.uni-erlangen.de)
  *      Michael Schroeder (mlschroe@immd4.informatik.uni-erlangen.de)
  * Copyright (c) 1987 Oliver Laumann
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2, or (at your option)
+ * the Free Software Foundation; either version 3, or (at your option)
  * any later version.
  *
  * This program is distributed in the hope that it will be useful,
@@ -14,9 +22,9 @@
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with this program (see the file COPYING); if not, write to the
- * Free Software Foundation, Inc.,
- * 59 Temple Place - Suite 330, Boston, MA  02111-1307, USA
+ * along with this program (see the file COPYING); if not, see
+ * http://www.gnu.org/licenses/, or contact Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02111-1301  USA
  *
  ****************************************************************
  */
@@ -36,7 +44,7 @@
 #include "logfile.h"	/* logfopen() */
 
 extern struct display *displays, *display;
-extern struct win *windows, *fore, *wtab[], *console_window;
+extern struct win *windows, *fore, *console_window;
 extern char *ShellArgs[];
 extern char *ShellProg;
 extern char screenterm[];
@@ -50,7 +58,7 @@ extern char **NewEnv;
 extern int visual_bell, maxwin;
 extern struct event logflushev;
 extern int log_flush, logtstamp_after;
-extern int ZombieKey_destroy, ZombieKey_resurrect;
+extern int ZombieKey_destroy, ZombieKey_resurrect, ZombieKey_onerror;
 extern struct layer *flayer;
 extern int maxusercount;
 extern int pty_preopen;
@@ -88,6 +96,7 @@ static void pseu_readev_fn __P((struct event *, char *));
 static void pseu_writeev_fn __P((struct event *, char *));
 #endif
 static void win_silenceev_fn __P((struct event *, char *));
+static void win_destroyev_fn __P((struct event *, char *));
 
 static int  OpenDevice __P((char **, int, int *, char **));
 static int  ForkWindow __P((struct win *, char **, char *));
@@ -98,11 +107,14 @@ static int  zmodem_parse __P((struct win *, char *, int));
 #endif
 
 
+struct win **wtab;	/* window table */
 
 int VerboseCreate = 0;		/* XXX move this to user.h */
 
 char DefaultShell[] = "/bin/sh";
+#ifndef HAVE_EXECVPE
 static char DefaultPath[] = ":/usr/ucb:/bin:/usr/bin";
+#endif
 
 /* keep this in sync with the structure definition in window.h */
 struct NewWindow nwin_undef   = 
@@ -202,7 +214,8 @@ struct LayFuncs WinLf =
   WinClearLine,
   WinRewrite,
   WinResize,
-  WinRestore
+  WinRestore,
+  0
 };
 
 static int
@@ -244,6 +257,12 @@ int *lenp;
   debug1("WinProcess: %d bytes\n", *lenp);
   fore = (struct win *)flayer->l_data;
 
+  if (fore->w_type == W_TYPE_GROUP)
+    {
+      *bufpp += *lenp;
+      *lenp = 0;
+      return;
+    }
   if (fore->w_ptyfd < 0)	/* zombie? */
     {
       ZombieProcess(bufpp, lenp);
@@ -269,8 +288,7 @@ int *lenp;
       debug2("window %d, user %s: ", fore->w_number, D_user->u_name);
       debug2("writelock %d (wlockuser %s)\n", fore->w_wlock,
 	     fore->w_wlockuser ? fore->w_wlockuser->u_name : "NULL");
-      /* XXX FIXME only display !*/
-      WBell(fore, visual_bell);
+      Msg(0, "write: permission denied (user %s)", D_user->u_name);
       *bufpp += *lenp;
       *lenp = 0;
       return;
@@ -466,7 +484,7 @@ WinRestore()
 {
   struct canvas *cv;
   fore = (struct win *)flayer->l_data;
-  debug1("WinRestore: win %x\n", fore);
+  debug1("WinRestore: win %p\n", fore);
   for (cv = flayer->l_cvlist; cv; cv = cv->c_next)
     {
       display = cv->c_display;
@@ -542,6 +560,13 @@ struct NewWindow *newwin;
   extern struct acluser *users;
 #endif
 
+  if (!wtab)
+    {
+      if (!maxwin)
+	maxwin = MAXWIN;
+      wtab = calloc(maxwin, sizeof(struct win *));
+    }
+
   debug1("NewWindow: StartAt %d\n", newwin->StartAt);
   debug1("NewWindow: aka     %s\n", newwin->aka?newwin->aka:"NULL");
   debug1("NewWindow: dir     %s\n", newwin->dir?newwin->dir:"NULL");
@@ -584,14 +609,15 @@ struct NewWindow *newwin;
 
   if ((f = OpenDevice(nwin.args, nwin.lflag, &type, &TtyName)) < 0)
     return -1;
+  if (type == W_TYPE_GROUP)
+    f = -1;
 
-  if ((p = (struct win *)malloc(sizeof(struct win))) == 0)
+  if ((p = (struct win *)calloc(1, sizeof(struct win))) == 0)
     {
       close(f);
-      Msg(0, strnomem);
+      Msg(0, "%s", strnomem);
       return -1;
     }
-  bzero((char *)p, (int)sizeof(struct win));
 
 #ifdef UTMPOK
   if (type != W_TYPE_PTY)
@@ -610,17 +636,22 @@ struct NewWindow *newwin;
     p->w_term = SaveStr(nwin.term);
 
   p->w_number = n;
+  p->w_group = 0;
+  if (fore && fore->w_type == W_TYPE_GROUP)
+    p->w_group = fore;
+  else if (fore && fore->w_group)
+    p->w_group = fore->w_group;
 #ifdef MULTIUSER
   /*
    * This is dangerous: without a display we use creators umask
-   * This is intended to be usefull for detached startup.
+   * This is intended to be useful for detached startup.
    * But is still better than default bits with a NULL user.
    */
   if (NewWindowAcl(p, display ? D_user : users))
     {
       free((char *)p);
       close(f);
-      Msg(0, strnomem);
+      Msg(0, "%s", strnomem);
       return -1;
     }
 #endif
@@ -712,7 +743,7 @@ struct NewWindow *newwin;
     SetCharsets(p, nwin.charset);
 #endif
 
-  if (VerboseCreate)
+  if (VerboseCreate && type != W_TYPE_GROUP)
     {
       struct display *d = display; /* WriteString zaps display */
 
@@ -728,6 +759,7 @@ struct NewWindow *newwin;
       display = d;
     }
 
+  p->w_deadpid = 0;
   p->w_pid = 0;
 #ifdef PSEUDOS
   p->w_pwin = 0;
@@ -762,6 +794,17 @@ struct NewWindow *newwin;
   *pp = p;
   p->w_next = windows;
   windows = p;
+
+  if (type == W_TYPE_GROUP)
+    {
+      SetForeWindow(p);
+      Activate(p->w_norefresh);
+      WindowChanged((struct win*)0, 'w');
+      WindowChanged((struct win*)0, 'W');
+      WindowChanged((struct win*)0, 0);
+      return n;
+    }
+
   p->w_lflag = nwin.lflag;
 #ifdef UTMPOK
   p->w_slot = (slot_t)-1;
@@ -811,6 +854,9 @@ struct NewWindow *newwin;
       SetTimeout(&p->w_silenceev, p->w_silencewait * 1000);
       evenq(&p->w_silenceev);
     }
+  p->w_destroyev.type = EV_TIMEOUT;
+  p->w_destroyev.data = 0;
+  p->w_destroyev.handler = win_destroyev_fn;
 
   SetForeWindow(p);
   Activate(p->w_norefresh);
@@ -837,6 +883,8 @@ struct win *p;
   if ((f = OpenDevice(p->w_cmdargs, lflag, &p->w_type, &TtyName)) < 0)
     return -1;
 
+  evdeq(&p->w_destroyev); /* no re-destroy of resurrected zombie */
+
   strncpy(p->w_tty, *TtyName ? TtyName : p->w_title, MAXSTR - 1);
   p->w_ptyfd = f;
   p->w_readev.fd = f;
@@ -860,6 +908,7 @@ struct win *p;
       display = d;
     }
 
+  p->w_deadpid = 0;
   p->w_pid = 0;
 #ifdef BUILTIN_TELNET
   if (p->w_type == W_TYPE_TELNET)
@@ -938,6 +987,14 @@ struct win *wp;
     logfclose(wp->w_log);
   ChangeWindowSize(wp, 0, 0, 0);
 
+  if (wp->w_type == W_TYPE_GROUP)
+    {
+      struct win *win;
+      for (win = windows; win; win = win->w_next)
+	if (win->w_group == wp)
+	  win->w_group = wp->w_group;
+    }
+
   if (wp->w_hstatus)
     free(wp->w_hstatus);
   for (i = 0; wp->w_cmdargs[i]; i++)
@@ -981,6 +1038,7 @@ struct win *wp;
   wp->w_layer.l_cvlist = 0;
   if (flayer == &wp->w_layer)
     flayer = 0;
+  LayerCleanupMemory(&wp->w_layer);
 
 #ifdef MULTIUSER
   FreeWindowAcl(wp);
@@ -988,6 +1046,7 @@ struct win *wp;
   evdeq(&wp->w_readev);		/* just in case */
   evdeq(&wp->w_writeev);	/* just in case */
   evdeq(&wp->w_silenceev);
+  evdeq(&wp->w_destroyev);
 #ifdef COPY_PASTE
   FreePaster(&wp->w_paster);
 #endif
@@ -1007,6 +1066,12 @@ char **namep;
 
   if (!arg)
     return -1;
+  if (strcmp(arg, "//group") == 0)
+    {
+      *typep = W_TYPE_GROUP;
+      *namep = "telnet";
+      return 0;
+    }
 #ifdef BUILTIN_TELNET
   if (strcmp(arg, "//telnet") == 0)
     {
@@ -1017,7 +1082,12 @@ char **namep;
     }
   else
 #endif
-  if ((stat(arg, &st)) == 0 && S_ISCHR(st.st_mode))
+  if (strncmp(arg, "//", 2) == 0)
+    {
+      Msg(0, "Invalid argument '%s'", arg);
+      return -1;
+    }
+  else if ((stat(arg, &st)) == 0 && S_ISCHR(st.st_mode))
     {
       if (access(arg, R_OK | W_OK) == -1)
 	{
@@ -1117,7 +1187,7 @@ char **args, *ttyn;
 {
   int pid;
   char tebuf[25];
-  char ebuf[10];
+  char ebuf[20];
   char shellbuf[7 + MAXPATHLEN];
   char *proc;
 #ifndef TIOCSWINSZ
@@ -1387,6 +1457,7 @@ char **args, *ttyn;
   return pid;
 }
 
+#ifndef HAVE_EXECVPE
 void
 execvpe(prog, args, env)
 char *prog, **args, **env;
@@ -1432,6 +1503,7 @@ char *prog, **args, **env;
   if (eaccess)
     errno = EACCES;
 }
+#endif
 
 #ifdef PSEUDOS
 
@@ -1460,12 +1532,11 @@ char **av;
       Msg(0, "You feel dead inside.");
       return -1;
     }
-  if (!(pwin = (struct pseudowin *)malloc(sizeof(struct pseudowin))))
+  if (!(pwin = (struct pseudowin *)calloc(1, sizeof(struct pseudowin))))
     {
-      Msg(0, strnomem);
+      Msg(0, "%s", strnomem);
       return -1;
     }
-  bzero((char *)pwin, (int)sizeof(*pwin));
 
   /* allow ^a:!!./ttytest as a short form for ^a:exec !.. ./ttytest */
   for (s = *av; *s == ' '; s++)
@@ -1807,13 +1878,21 @@ char *data;
 	return;
 #endif
       debug2("Window %d: read error (errno %d) - killing window\n", p->w_number, errno);
-      WindowDied(p);
+#ifdef BSDWAIT
+      WindowDied(p, (union wait)0, 0);
+#else
+      WindowDied(p, 0, 0);
+#endif
       return;
     }
   if (len == 0)
     {
       debug1("Window %d: EOF - killing window\n", p->w_number);
-      WindowDied(p);
+#ifdef BSDWAIT
+      WindowDied(p, (union wait)0, 0);
+#else
+      WindowDied(p, 0, 0);
+#endif
       return;
     }
   debug1(" -> %d bytes\n", len);
@@ -1850,7 +1929,11 @@ char *data;
       p->w_pwin->p_inlen += len;
     }
 #endif
+
+  LayPause(&p->w_layer, 1);
   WriteString(p, bp, len);
+  LayPause(&p->w_layer, 0);
+
   return;
 }
 
@@ -1990,7 +2073,18 @@ char *data;
 	continue;
 #endif
       Msg(0, "Window %d: silence for %d seconds", p->w_number, p->w_silencewait);
+      p->w_silence = SILENCE_FOUND;
+      WindowChanged(p, 'f');
     }
+}
+
+static void
+win_destroyev_fn(ev, data)
+struct event *ev;
+char *data;
+{
+  struct win *p = (struct win *)ev->data;
+  WindowDied(p, p->w_exitstatus, 1);
 }
 
 #ifdef ZMODEM
@@ -2043,7 +2137,7 @@ int len;
 		  D_readev.condpos = D_readev.condneg = 0;
 		  while (len-- > 0)
 		    AddChar(*bp++);
-		  Flush();
+		  Flush(0);
 		  Activate(D_fore ? D_fore->w_norefresh : 0);
 		  return 1;
 		}
@@ -2139,7 +2233,7 @@ int len;
       return;
     }
   flayer = &p->w_layer;
-  Input(":", 100, INP_COOKED, zmodem_fin, NULL);
+  Input(":", 100, INP_COOKED, zmodem_fin, NULL, 0);
   s = send ? zmodem_sendcmd : zmodem_recvcmd;
   n = strlen(s);
   LayProcess(&s, &n);
@@ -2177,3 +2271,54 @@ struct display *d;
 }
 
 #endif
+
+int
+WindowChangeNumber(struct win *win, int n)
+{
+  struct win *p;
+  int old = win->w_number;
+
+  if (n < 0 || n >= maxwin)
+    {
+      Msg(0, "Given window position is invalid.");
+      return 0;
+    }
+
+  p = wtab[n];
+  wtab[n] = win;
+  win->w_number = n;
+  wtab[old] = p;
+  if (p)
+    p->w_number = old;
+#ifdef MULTIUSER
+  /* exchange the acls for these windows. */
+  AclWinSwap(old, n);
+#endif
+#ifdef UTMPOK
+  /* exchange the utmp-slots for these windows */
+  if ((win->w_slot != (slot_t) -1) && (win->w_slot != (slot_t) 0))
+    {
+      RemoveUtmp(win);
+      SetUtmp(win);
+    }
+  if (p && (p->w_slot != (slot_t) -1) && (p->w_slot != (slot_t) 0))
+    {
+      /* XXX: first display wins? */
+#if 0
+      /* Does this make more sense? */
+      display = p->w_lastdisp ? p->w_lastdisp : p->w_layer.l_cvlist ? p->w_layer.l_cvlist->c_display : 0;
+#else
+      display = win->w_layer.l_cvlist ? win->w_layer.l_cvlist->c_display : 0;
+#endif
+      RemoveUtmp(p);
+      SetUtmp(p);
+    }
+#endif
+
+  WindowChanged(win, 'n');
+  WindowChanged((struct win *)0, 'w');
+  WindowChanged((struct win *)0, 'W');
+  WindowChanged((struct win *)0, 0);
+  return 1;
+}
+

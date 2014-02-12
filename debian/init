@@ -11,9 +11,13 @@
 # Default-Start:     S
 # Default-Stop:
 # Short-Description: screen sessions cleaning
+# Description: Cleans up the screen session directory and fixes its
+#  permissions if needed.
 ### END INIT INFO
 
 set -e
+
+test -f /usr/bin/screen || exit 0
 
 SCREENDIR=/var/run/screen
 
@@ -24,7 +28,7 @@ start)
         mkdir $SCREENDIR
         chown root:utmp $SCREENDIR
     fi
-    find $SCREENDIR -type p -print0 | xargs -0r rm -f --
+    find $SCREENDIR -type p -delete
 # If the local admin has used dpkg-statoverride to install the screen
 # binary with different set[ug]id bits, change the permissions of
 # $SCREENDIR accordingly
@@ -34,7 +38,7 @@ start)
     elif [ "$BINARYPERM" -ge 2000 ]; then
         chmod 0775 $SCREENDIR
     else
-        chmod 0777 $SCREENDIR
+        chmod 1777 $SCREENDIR
     fi
     ;;
 stop|restart|reload|force-reload)

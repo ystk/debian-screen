@@ -1,3 +1,262 @@
+screen (4.1.0~20120320gitdb59704-7) unstable; urgency=low
+
+  * Extend 60-644788-screen-4.1.0-4.0.3-interoperability.patch:
+    + Add support for detaching (Closes: #684342)
+    + Document remaining issues in debian/NEWS
+
+ -- Axel Beckert <abe@debian.org>  Sun, 16 Sep 2012 13:42:12 +0200
+
+screen (4.1.0~20120320gitdb59704-6) unstable; urgency=low
+
+  * Apply patch by Julien Cristau <jcristau@debian.org> to add 4.0.3
+    interoperability. (Closes: #683228; fixing the issue properly instead
+    of working around it. Thanks!)
+    + Drop all debconf handling and translations of debconf templates
+      (Closes: #679747, #683227; Thanks Beatrice Torracca and Christian
+      Perrier!)
+    + Drop build-depends on po-debconf and pre-depends on debconf
+    + Drop debian/NEWS (Closes: #678950)
+    + Remove no more necessary lintian override
+  * Screen's info pages are now split over more files than before. Also
+    include the new file doc/screen.info-6 (Closes: #682283)
+
+ -- Axel Beckert <abe@debian.org>  Tue, 07 Aug 2012 08:54:42 +0200
+
+screen (4.1.0~20120320gitdb59704-5) unstable; urgency=low
+
+  * Disable patch 52fix_screen_utf8_nfd.patch since it introduced a
+    regression (Closes: #677512, Reopens: #600246)
+  * Fix bug number of Slovak debconf translation in
+    4.1.0~20120320gitdb59704-3 changelog entry
+  * Use GMANE URLs for refering to upstream discussions as lists.gnu.org
+    doesn't support threading over month boundaries. (Thanks Evgeni
+    Golov!)
+  * Add translations of debconf templates:
+    + Romanian (Closes: #679366; Thanks Andrei POPESCU!)
+  * Update translations of debconf templates:
+    + German (Closes: #679452; Thanks Helge Kreutzmann!)
+
+ -- Axel Beckert <abe@debian.org>  Sat, 30 Jun 2012 15:27:26 +0200
+
+screen (4.1.0~20120320gitdb59704-4) unstable; urgency=low
+
+  * Fix missing quoting in debian/config's dpkg --compare-version call
+    (Closes: #678207)
+  * Update NEWS.Debian entry. Now includes how to resurrect running
+    screen 4.0.3 sessions including generic commands for copy and
+    paste. (Closes: #678181)
+  * Set sticky bit on /var/run/screen if screen is not setuid or setgid
+    (Closes: #592895)
+  * Fix race condition when creating directories in /var/run/screen/.
+    (Closes: #653434)
+  * Add translations of debconf templates
+    + Norwegian Bokmål (Closes: #678112; Thanks Bjørn Steensrud!)
+    + Polish (Closes: #678158; Thanks Michał Kułach!)
+    + Galician (Closes: #678469; Thanks Jorge Barreiro!)
+    + French (Closes: #678548; Thanks David Prévot!)
+    + Czech (Closes: #678669; Thanks Michal Šimůnek!)
+    + Spanish (Closes: #678891; Thanks Fernando C. Estrada!)
+
+ -- Axel Beckert <abe@debian.org>  Sun, 24 Jun 2012 23:54:09 +0200
+
+screen (4.1.0~20120320gitdb59704-3) unstable; urgency=low
+
+  * Fix workaround for #644788 (detect running screen in maintainer
+    scripts) on kfreebsd (Closes: #677227)
+  * Update revised debconf templates and package description received from
+    the debian-l10n-english team (Closes: #677303)
+  * Add translations of debconf templates
+    + Simplified Chinese (Closes: #677726; Thanks Aron Xu!)
+    + Danish (Closes: #677748; Thanks Joe Hansen!)
+    + Swedish (Closes: #677752; Thanks Martin Bagge!)
+    + Slovak (Closes: #677848; Thanks Miguel Figueiredo!)
+    + Portuguese (Closes: #677838; Thanks Miguel Figueiredo!)
+    + Russian (Closes: #678021; Thanks Yuri Kozlov!)
+  * Updated German translation
+  * Run debconf-updatepo automatically in clean target
+    + Add build-dependency on po-debconf
+
+ -- Axel Beckert <abe@debian.org>  Mon, 18 Jun 2012 21:10:49 +0200
+
+screen (4.1.0~20120320gitdb59704-2) unstable; urgency=low
+
+  * Upload to unstable as the two RC issues which the experimental package
+    had, are now resolved or at least workarounded:
+    - Copy /usr/bin/screen to /tmp/screen-4.0.3 on upgrade from pre-4.1.0
+      and use debconf to inform the user about it. (Closes: #644788)
+    - Add patch to fix terminal handling on kfreebsd (Closes: #660567)
+      Thanks Jan Christoph Nordholz!
+  * Add patch to fix parallel building.
+  * Use dh_lintian instead of handling lintian overrides manually.
+  * No more clean up manually what dh_clean can clean up.
+  * Add new patch to fix man page errors and warnings:
+    - Lintian warning manpage-has-errors-from-man fixed by replacing all
+      occurrences of "..." by "…"
+    - Fixes tons of lintian warnings hyphen-used-as-minus-sign
+    - Added two false positives of hyphen-used-as-minus-sign to
+      lintian-overrides
+    - Fixes two typos found by lintian
+    - Update 80EXP_session_creation_time.patch accordingly
+
+ -- Axel Beckert <abe@debian.org>  Sun, 10 Jun 2012 17:54:53 +0200
+
+screen (4.1.0~20120320gitdb59704-1) experimental; urgency=low
+
+  * Happy 25th Birthday GNU Screen
+  * New upstream snapshot
+    - Refreshed the following patches:
+      + 01configure_fix_alpha_vsprintf
+      + 11replace_doc_paths
+      + 14size_matters
+      + 48screen-ipv6
+      + 51fix-utf8-status-padding-bug
+      + 52fix_screen_utf8_nfd
+      + 58-show-encoding-hardstatus
+      + 80EXP_session_creation_time
+    - Removed those hunks from 16fix_gcc_warnings which have been applied
+      upstream.
+    - Manually adapted patch 26source_encoding.
+
+  [ Axel Beckert ]
+  * Switch Maintainer and Uploaders.
+  * Add patch fix-utf8-status-padding-bug by Kees Cook and Dustin Kirkland
+    (probably fixes #215955)
+  * Updated previous changelog entry to document further bugs which have
+    been fixed by that upload.
+  * Add build dependency on dpkg-dev (>= 1.16.1~) for being able to
+    include /usr/share/dpkg/buildflags.mk
+  * Add lintian override for init.d-script-does-not-implement-optional-option
+    warning. A cleanup script does not need a status subcommand.
+  * Fix lintian warning init.d-script-missing-lsb-description.
+  * Changes taken from Ubuntu's screen package:
+    - debian/init: Use find -delete rather than find -print0 | xargs rm to
+      avoid starting two processes.
+    - debian/patches/58-show-encoding-hardstatus.patch (Closes: #533498;
+      the remaining part of #533498 has been fixed upstream, see
+      https://savannah.gnu.org/bugs/index.php?26401)
+  * Add patch 52fix_screen_utf8_nfd by Nobuhiro Iwamatsu to fix screen
+    outputing "ÿ" after a connected character. (Closes: #600246)
+  * Bumped Standards-Version to 3.9.3.
+
+  [ Moritz Muehlenhoff ]
+  * Enable hardening build flags (Closes: #656513)
+
+ -- Axel Beckert <abe@debian.org>  Tue, 20 Mar 2012 22:16:07 +0100
+
+screen (4.1.0~20110819git450e8f3-1) experimental; urgency=low
+
+  [ Brian P Kroth ]
+  * New upstream snapshot based on 4.1.0 prerelease 20101110git066b098 as
+    packaged by Fedora 15 (Closes: #641867)
+  * Removed the following patches which have been applied upstream or are
+    otherwise no more necessary:
+    - 01CVS
+    - 02configure_use_ncursesw
+    - 03fully_expand_screenencodings
+    - 09CHERRY_*
+    - 15manpage_typos
+    - 16fix_gcc_warnings_II
+    - 18manpage_maxwin_limit
+    - 19flowcontrol_lockup
+    - 20defmonitor
+    - 21manpage_nethack_activation
+    - 25allow_symlink_sockdir
+    - 27doc_sty_noenvpassing
+    - 28blankerprg_callsemantics
+    - 29infodoc_version
+    - 31upstream_cherries
+    - 33increase_max_winmsg_renditions
+    - 35screen_invoked_with_a_command
+    - 40cjk_eastasian
+    - 50EXP_tilde_expansion
+  * Refreshed the following patches:
+    - 10norootpassword
+    - 14size_matters
+    - 26source_encoding
+  * Added patches from Fedora:
+    - 47screen-cc: Additional assertions to improve stability
+    - 48screen-ipv6: IPv6 support for built-in telnet
+  * Enable telnet (Closes: #353090) and localized day/month names
+
+  [ Axel Beckert ]
+  * Add myself as Uploader.
+  * Remove Adam Lazur from Uploaders. (Closes: #603009)
+  * New upstream snapshot based on 4.1.0 prerelease, commit 450e8f3 of
+    2011-Aug-19. (LP: #183849)
+    - Fixes a crash when attaching to a layout that was created while
+      detached. (Closes: #591624, LP: #786292, #788670)
+    - Raises MAXWIN to 100 (Closes: #450421)
+    - No more segfaults if resized to 0 or 1 line tall (Closes: #532240,
+      LP: #315237)
+    - screen -d -m no more segfaults on setenv without value (Closes: #496750)
+    - Now has tsl, fsl and dsl terminfo caps (Closes: #152961)
+    - Windows created with "-d -m" no more ignore "-X exec" (Closes: #481411)
+    - Now has a session name string escape (Closes: #488619)
+    - Re-optimize screen updates (Closes: #621704, LP: #588846)
+    - No more mishandles xterm control string to set window title (Closes:
+      #344759) Thanks to Thomas Dickey and Sadrul Habib Chowdhury.
+    - Fixes/Relaxes requirement for a controlling terminal (Closes: #461107)
+    - Uses fuzzy-matching for session names only if required (Closes: #361274)
+    - Has customizable digraphs (Closes: #25096, a wishlist bug from 1998! :-)
+    - Fixes a bug with displaying blank spaces with bce on. (Closes: #578729,
+      LP: #702094)
+    - Fix using alternate screen buffers in some cases. (Closes: #558724)
+    - Several fixes for handling mouse events. (Closes: #223320)
+    - Passes signals to programs running inside screen on kfreebsd.
+      (Closes: 522689)
+    - Documents vertical split in man-page. (Closes: #611453)
+    - Adds focus left/right commands. (Closes: #526002)
+    - Locked screens no more can be unlocked by reattaching to it:
+      (Closes: #238535)
+    - Shows cursor in front of the selected window in "windowlist -b"
+      (Closes: #446082)
+  * Remove the patches which have been applied upstream or are
+    otherwise no more necessary:
+    - 17manpage_sessionname_warning
+    - 30fix_fsf_address
+  * Refreshed the following patches:
+    - 10norootpassword
+    - 11replace_doc_paths
+    - 12kfreebsd_ctty
+    - 14size_matters
+    - 16fix_gcc_warnings
+    - 22exchange_file_mode
+    - 23exitcode_q_ls
+    - 24option_parser
+    - 32misc_minor_fixes
+  * Refreshed and renumbered the following patches:
+    - {51 => 80}EXP_session_creation_time
+  * Added patches:
+    - 46fix-keybinding-typo-in-manpage (Closes: #630535, #541793)
+    - 49long-usernames (Closes: #560231, LP: #582153)
+    - 50increase-max-TERM-length (Closes: #621804, #630976)
+  * Use dh_autoreconf
+    - Build-Depend on dh-autoreconf
+  * Convert to source format "3.0 (quilt)"
+    - Remove build dependency on dpatch
+  * Bump Standards-Version to 3.9.2 (no changes)
+  * Update debian/copyright
+    - Upstream switched to GPLv3
+    - Update debian packaging information
+  * Fix lintian warning debian-rules-missing-recommended-target
+  * Add lintian override for
+    possibly-insecure-handling-of-tmp-files-in-maintainer-script
+  * /etc/init.d/screen-cleanup: check for existence of screen binary
+    (Closes: #612990)
+  * Add Vcs-* headers
+  * Add extend-diff-ignore=config\.h\.in to debian/source/options
+  * Added a NEWS file stating problems to attach to a detached 4.0.3
+    session with a 4.1.0 screen, e.g. during a dist-upgrade
+  * Suggest iselect, screenie or byobu (Closes: #176626)
+
+ -- Axel Beckert <abe@debian.org>  Sun, 09 Oct 2011 03:29:31 +0200
+
+screen (4.0.3-14+hurd.1) unreleased; urgency=low
+
+  * Fix #522689.
+
+ -- Samuel Thibault <sthibault@debian.org>  Sun, 06 Mar 2011 23:28:56 +0000
+
 screen (4.0.3-14) unstable; urgency=low
 
   * Cherry-pick a few upstream commits:
