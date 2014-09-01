@@ -478,6 +478,8 @@ int *val;
 
 char *noargs[1];
 
+int enter_window_name_mode = 0;
+
 void
 InitKeytab()
 {
@@ -2097,7 +2099,7 @@ int key;
 	ChangeAKA(fore, *args, strlen(*args));
       break;
     case RC_COLON:
-      Input(":", 100, INP_EVERY, Colonfin, NULL, 0);
+      Input(":", MAXSTR, INP_EVERY, Colonfin, NULL, 0);
       if (*args && **args)
 	{
 	  s = *args;
@@ -2664,9 +2666,9 @@ int key;
       s = NULL;
       if (ParseSaveStr(act, &s))
 	break;
-      if (strlen(s) >= 20)
+      if (strlen(s) >= MAXTERMLEN)
 	{
-	  OutputMsg(0, "%s: term: argument too long ( < 20)", rc_name);
+	  OutputMsg(0, "%s: term: argument too long ( < %d)", rc_name, MAXTERMLEN);
 	  free(s);
 	  break;
 	}
@@ -3184,6 +3186,10 @@ int key;
 #ifdef NETHACK
     case RC_NETHACK:
       (void)ParseOnOff(act, &nethackflag);
+      break;
+#else
+    case RC_NETHACK:
+      Msg(0, "nethack disabled at build time");
       break;
 #endif
     case RC_HARDCOPY_APPEND:
@@ -5744,6 +5750,8 @@ char *data;	/* dummy */
   ASSERT(display);
   if (len && fore)
     ChangeAKA(fore, buf, strlen(buf));
+
+  enter_window_name_mode = 0;
 }
 
 static void
@@ -5751,6 +5759,11 @@ InputAKA()
 {
   char *s, *ss;
   int n;
+
+  if (enter_window_name_mode == 1) return;
+
+  enter_window_name_mode = 1;
+
   Input("Set window's title to: ", sizeof(fore->w_akabuf) - 1, INP_COOKED, AKAfin, NULL, 0);
   s = fore->w_title;
   if (!s)
@@ -6360,6 +6373,12 @@ char *data;
       buf = crypt(u->u_password, salt);
       bzero(u->u_password, strlen(u->u_password));
       free((char *)u->u_password);
+      if (!buf)
+	{
+	  Msg(0, "[ crypt() error - no secure ]");
+	  u->u_password = NullStr;
+	  return;
+	}
       u->u_password = SaveStr(buf);
       bzero(buf, strlen(buf));
 #ifdef COPY_PASTE
@@ -6472,6 +6491,7 @@ int i;
 {
   struct action *act;
   int discard = 0;
+  int keyno = i;
 
   debug1("StuffKey #%d", i);
 #ifdef DEBUG
@@ -6511,6 +6531,9 @@ int i;
 
   if (discard && (!act || act->nr != RC_COMMAND))
     {
+      /* if the input was just a single byte we let it through */
+      if (D_tcs[keyno + T_CAPS].str && strlen(D_tcs[keyno + T_CAPS].str) == 1)
+	return -1;
       if (D_ESCseen)
         {
           D_ESCseen = 0;

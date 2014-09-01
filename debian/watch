@@ -1,5 +1,6 @@
-# $Id: watch,v 1.1 2002/07/08 14:07:18 laz Exp $
-version=2
-# This is a variant HTTP format with more possibilities:
-# Homepage  Pattern  [Version  [Action]]
-opts=pasv ftp://ftp.uni-erlangen.de/pub/utilities/screen/screen-(\d.*)\.tar\.gz
+version=3
+opts=pgpsigurlmangle=s/$/.sig/ \
+http://ftp.gnu.org/gnu/screen/screen-([\d\.]+)\.tar\.gz
+
+opts=pgpsigurlmangle=s/$/.sig/ \
+http://download.savannah.gnu.org/releases/screen/screen-([\d\.]+)\.tar\.gz
