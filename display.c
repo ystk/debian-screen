@@ -594,7 +594,7 @@ int c;
 # ifdef UTF8
   if (D_encoding == UTF8)
     {
-      c = (c & 255) | (unsigned char)D_rend.font << 8;
+      c = (c & 255) | (unsigned char)D_rend.font << 8 | (unsigned char)D_rend.fontx << 16;
 #  ifdef DW_CHARS
       if (D_mbcs)
 	{
@@ -1882,6 +1882,10 @@ struct mchar *mc;
 #ifdef FONT
   if (D_rend.font != mc->font)
     SetFont(mc->font);
+#ifdef UTF8
+  if (D_encoding == UTF8)
+    D_rend.fontx = mc->fontx;
+#endif
 #endif
 }
 
@@ -1934,6 +1938,10 @@ int x;
 #ifdef FONT
   if (D_rend.font != ml->font[x])
     SetFont(ml->font[x]);
+#ifdef UTF8
+  if (D_encoding == UTF8)
+    D_rend.fontx = ml->fontx[x];
+#endif
 #endif
 }
 
@@ -2155,7 +2163,7 @@ int start, max;
     {
       int chars = strlen_onscreen((unsigned char *)(s + start), (unsigned char *)(s + max));
       D_encoding = 0;
-      PutWinMsg(s, start, max);
+      PutWinMsg(s, start, max + ((max - start) - chars)); /* Multibyte count */
       D_encoding = UTF8;
       D_x -= (max - chars);	/* Yak! But this is necessary to count for
 				   the fact that not every byte represents a
@@ -2249,11 +2257,15 @@ void
 RefreshHStatus()
 {
   char *buf;
-
+#ifdef UTF8
+  int extrabytes = strlen(hstatusstring) - strlen_onscreen(hstatusstring, NULL);
+#else
+  int extrabytes = 0;
+#endif
   evdeq(&D_hstatusev);
   if (D_status == STATUS_ON_HS)
     return;
-  buf = MakeWinMsgEv(hstatusstring, D_fore, '%', (D_HS && D_has_hstatus == HSTATUS_HS && D_WS > 0) ? D_WS : D_width - !D_CLP, &D_hstatusev, 0);
+  buf = MakeWinMsgEv(hstatusstring, D_fore, '%', (D_HS && D_has_hstatus == HSTATUS_HS && D_WS > 0) ? D_WS : D_width - !D_CLP + extrabytes, &D_hstatusev, 0);
   if (buf && *buf)
     {
       ShowHStatus(buf);
@@ -2348,8 +2360,13 @@ int y, from, to, isblank;
 	{
 	  if (y == cv->c_ye + 1 && from >= cv->c_xs && from <= cv->c_xe)
 	    {
+#ifdef UTF8
+	      int extrabytes = strlen(captionstring) - strlen_onscreen(captionstring, NULL);
+#else
+	      int extrabytes = 0;
+#endif
 	      p = Layer2Window(cv->c_layer);
-	      buf = MakeWinMsgEv(captionstring, p, '%', cv->c_xe - cv->c_xs + (cv->c_xe + 1 < D_width || D_CLP), &cv->c_captev, 0);
+	      buf = MakeWinMsgEv(captionstring, p, '%', cv->c_xe - cv->c_xs + (cv->c_xe + 1 < D_width || D_CLP) + extrabytes, &cv->c_captev, 0);
 	      if (cv->c_captev.timeout.tv_sec)
 		evenq(&cv->c_captev);
 	      xx = to > cv->c_xe ? cv->c_xe : to;
@@ -2358,7 +2375,7 @@ int y, from, to, isblank;
 	      SetRendition(&mchar_so);
 	      if (l > xx - cv->c_xs + 1)
 		l = xx - cv->c_xs + 1;
-	      l = PrePutWinMsg(buf, from - cv->c_xs, l);
+	      l = PrePutWinMsg(buf, from - cv->c_xs, l + extrabytes);
 	      from = cv->c_xs + l;
 	      for (; from <= xx; from++)
 		PUTCHARLP(' ');
@@ -2583,7 +2600,7 @@ int from, to, y;
       if (x || D_x != D_width || D_y != y - 1)
 #endif
         {
-	  if (x < to || x != D_width - 1 || ml->image[x + 1])
+	  if (ml != NULL && (x < to || x != D_width - 1 || ml->image[x + 1]))
 	    if (cmp_mline(oml, ml, x))
 	      continue;
 	  GotoPos(x, y);
@@ -3720,6 +3737,7 @@ char **cmdv;
       Msg(errno, "fork");
       close(D_blankerev.fd);
       D_blankerev.fd = -1;
+      close(slave);
       return;
     case 0:
       displays = 0;
@@ -3773,6 +3791,7 @@ char **cmdv;
   evenq(&D_blankerev);
   D_blocked = 4;
   ClearAll();
+  close(slave);
 }
 
 #endif /* BLANKER_PRG */

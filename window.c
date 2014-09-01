@@ -403,6 +403,7 @@ struct mchar *rend;
   register unsigned char *p, *i;
 #ifdef FONT
   register unsigned char *f;
+  register unsigned char *fx;
 #endif
 #ifdef COLOR
   register unsigned char *c;
@@ -424,6 +425,7 @@ struct mchar *rend;
   p = fore->w_mlines[y].attr + x1;
 #ifdef FONT
   f = fore->w_mlines[y].font + x1;
+  fx = fore->w_mlines[y].fontx + x1;
 # ifdef DW_CHARS
   if (is_dw_font(rend->font))
     return EXPENSIVE;
@@ -447,6 +449,8 @@ struct mchar *rend;
 	return EXPENSIVE;
 #ifdef FONT
       if (*f++ != rend->font)
+	return EXPENSIVE;
+      if (*fx++ != rend->fontx)
 	return EXPENSIVE;
 #endif
 #ifdef COLOR
@@ -2233,7 +2237,7 @@ int len;
       return;
     }
   flayer = &p->w_layer;
-  Input(":", 100, INP_COOKED, zmodem_fin, NULL, 0);
+  Input(":", MAXSTR, INP_COOKED, zmodem_fin, NULL, 0);
   s = send ? zmodem_sendcmd : zmodem_recvcmd;
   n = strlen(s);
   LayProcess(&s, &n);

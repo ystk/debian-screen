@@ -722,6 +722,7 @@ struct msg *mp;
   char *args[MAXARGS];
   register int n;
   register char **pp = args, *p = mp->m.create.line;
+  char buf[20];
 
   nwin = nwin_undef;
   n = mp->m.create.nargs;
@@ -731,7 +732,6 @@ struct msg *mp;
   if (n)
     {
       int l, num;
-      char buf[20];
 
       l = strlen(p);
       if (IsNumColon(p, 10, buf, sizeof(buf)))
@@ -1528,7 +1528,7 @@ static void PasswordProcessInput __P((char *, int));
 
 struct pwdata {
   int l;
-  char buf[20 + 1];
+  char buf[MAXLOGINLEN + 1];
   struct msg m;
 };
 
@@ -1565,13 +1565,18 @@ int ilen;
       c = *(unsigned char *)ibuf++;
       if (c == '\r' || c == '\n')
 	{
+	  char *buf = NULL;
 	  up = D_user->u_password;
 	  pwdata->buf[l] = 0;
-	  if (strncmp(crypt(pwdata->buf, up), up, strlen(up)))
+	  buf = crypt(pwdata->buf, up);
+	  if (!buf || strncmp(buf, up, strlen(up)))
 	    {
 	      /* uh oh, user failed */
 	      bzero(pwdata->buf, sizeof(pwdata->buf));
-	      AddStr("\r\nPassword incorrect.\r\n");
+	      if (!buf)
+		AddStr("\r\ncrypt() failed.\r\n");
+	      else
+		AddStr("\r\nPassword incorrect.\r\n");
 	      D_processinputdata = 0;	/* otherwise freed by FreeDis */
 	      FreeDisplay();
 	      Msg(0, "Illegal reattach attempt from terminal %s.", pwdata->m.m_tty);
