@@ -1,3 +1,12 @@
+screen (4.0.3-14+deb6u1) squeeze-lts; urgency=high
+
+  * Fix stack overflow due to too deep recursion (CVE-2015-6806). (Closes:
+    #797624)
+    - Add debian/patches/61denial-of-service-stack-overflow-fix.dpatch to
+      apply upstream fix
+
+ -- Scott Kitterman <scott@kitterman.com>  Sat, 05 Sep 2015 16:48:47 -0400
+
 screen (4.0.3-14) unstable; urgency=low
 
   * Cherry-pick a few upstream commits:
