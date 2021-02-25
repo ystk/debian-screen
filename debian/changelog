@@ -1,3 +1,12 @@
+screen (4.2.1-3+deb8u2) jessie-security; urgency=high
+
+  * Non-maintainer upload by the ELTS team.
+  * [CVE-2021-26937] Fix invalid write access and application crash or
+    possibly unspecified other impact via a crafted UTF-8 character
+    sequence. (Closes: #982435)
+
+ -- Utkarsh Gupta <utkarsh@debian.org>  Wed, 17 Feb 2021 02:20:07 +0530
+
 screen (4.2.1-3+deb8u1) jessie-security; urgency=high
 
   * Fix stack overflow due to too deep recursion (CVE-2015-6806).

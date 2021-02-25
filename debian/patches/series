@@ -14,3 +14,4 @@
 62cherry-pick-8ffd5f46-fix-caption-hardstatus-color-rendering.patch
 # 80-99: experimental patches, new features etc.
 80EXP_session_creation_time.patch
+99_CVE-2021-26937.patch
